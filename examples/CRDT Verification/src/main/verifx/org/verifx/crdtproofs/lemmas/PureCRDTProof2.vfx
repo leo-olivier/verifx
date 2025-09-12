@@ -1,0 +1,15 @@
+import org.verifx.crdtproofs.pure.PureOpBasedCRDT
+
+trait PureCRDTProof2[Op[V, E], T[V, E] <: PureOpBasedCRDT[Op[V, E], T[V, E]]] {
+  proof is_a_CmRDT[V, E] {
+    forall (s: T[V, E], x: Op[V, E], timeX: VersionVector, y: Op[V, E], timeY: VersionVector) {
+      // The operations must be concurrent
+      timeX.concurrent(timeY) =>: {
+        // The effectors must commute
+        s.effect(x, timeX).effect(y, timeY).equals(
+          s.effect(y, timeY).effect(x, timeX)
+        )
+      }
+    }
+  }
+}
