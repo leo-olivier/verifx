@@ -1,0 +1,63 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.PureOpBasedCRDT
+import org.verifx.crdtproofs.lemmas.PureCRDTProof2
+
+object GraphOps {
+enum GraphOps[V, E] {
+    AddVertex(id: V) | RemoveVertex(id: V) |
+    AddArc(from: V, to: V, id: E) | RemoveArc(from: V, to: V, id: E)
+  }
+}
+
+class PureMultidigraph[V, E](polog: Set[TaggedOp[GraphOps[V, E]]])
+  extends PureOpBasedCRDT[GraphOps[V, E], PureMultidigraph[V, E]] {
+
+  def copy(newPolog: Set[TaggedOp[GraphOps[V, E]]]) =
+    new PureMultidigraph(newPolog)
+
+  // Remove operations are self-redundant
+  def selfRedundant(op: TaggedOp[GraphOps[V, E]]): Boolean = op.o match {
+    case _: RemoveVertex[V, E] => true
+    case _: RemoveArc[V, E] => true
+    case _ => false
+  }
+
+  // Check if `x` is redundant given `y`
+  def redundantBy(x: TaggedOp[GraphOps[V, E]], y: TaggedOp[GraphOps[V, E]]): Boolean = {
+    x.t.before(y.t) && {
+      x.o match {
+        case a: AddVertex =>
+          val v1 = a.id
+          y.o match {
+            case b: AddVertex    => v1 == b.id
+            case b: RemoveVertex => v1 == b.id
+            case _ => false
+          }
+
+        case a: AddArc =>
+          val v1 = a.from
+          val v2 = a.to
+          val e1 = a.id
+          y.o match {
+            case b: AddArc    => v1 == b.from && v2 == b.to && e1 == b.id
+            case b: RemoveArc => v1 == b.from && v2 == b.to && e1 == b.id
+            case b: RemoveVertex => v1 == b.id || v2 == b.id
+            case _ => false
+          }
+
+        case _ => false
+      }
+    }
+  }
+
+  // Check if the PO-Log contains a vertex or edge
+  def contains(v: V, e: E): Boolean =
+    this.polog.exists((op: TaggedOp[GraphOps[V, E]]) =>
+      op.o match {
+        case a: AddVertex => a.id == v
+        case a: AddArc    => a.id == e
+        case _ => false
+      })
+}
+
+object PureMultidigraph extends PureCRDTProof2[GraphOps, PureMultidigraph]

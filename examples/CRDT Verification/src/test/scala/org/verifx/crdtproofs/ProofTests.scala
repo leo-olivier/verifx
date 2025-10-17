@@ -447,4 +447,13 @@ class ProofTests extends FlatSpec with Prover {
     val awSet = ("PureRWSet", "is_a_CmRDT")
     prove(awSet)
   }
+
+  ////////////////////////////////////////
+  // Pure Op-based Add-Wins MultiDiGraph CRDT //
+  ////////////////////////////////////////
+
+  "PureMultidigraph" should "converge" in {
+    val graph = ("PureMultidigraph", "is_a_CmRDT")
+    prove(graph)
+  }
 }
