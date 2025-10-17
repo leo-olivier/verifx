@@ -9,7 +9,7 @@ enum GraphOps[V, E] {
   }
 }
 
-class PureAWMultidigraph[V, E](polog: Set[TaggedOp[GraphOps[V, E]]])
+class PureMultidigraph[V, E](polog: Set[TaggedOp[GraphOps[V, E]]])
   extends PureOpBasedCRDT[GraphOps[V, E], PureMultidigraph[V, E]] {
 
   def copy(newPolog: Set[TaggedOp[GraphOps[V, E]]]) =
