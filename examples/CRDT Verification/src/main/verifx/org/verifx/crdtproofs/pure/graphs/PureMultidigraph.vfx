@@ -2,6 +2,20 @@ import org.verifx.crdtproofs.VersionVector
 import org.verifx.crdtproofs.pure.PureOpBasedCRDT
 import org.verifx.crdtproofs.lemmas.PureCRDTProof2
 
+/*
+ * Implementation of a pure op-based Add-Wins multidigraph CRDT,
+ * following the specification from:
+ *   Olivier, Morcos, Didonet Del Fabro, Gerard.
+ *   "A Local-First Collaborative Modeling Approach with Replicated Data Types"
+ *   HAL https://cea.hal.science/cea-05322894v1 (2025).
+ *
+ * Supports four operations:
+ * - addVertex(v): adds vertex `v` to the graph
+ * - removeVertex(v): removes vertex `v` from the graph
+ * - addArc(from, to, e): adds arc `e` from vertex `from` to vertex `to`
+ * - removeArc(from, to, e): removes arc `e` from vertex `from` to vertex `to`
+ */
+
 object GraphOps {
 enum GraphOps[V, E] {
     AddVertex(id: V) | RemoveVertex(id: V) |

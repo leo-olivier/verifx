@@ -2,6 +2,23 @@ import org.verifx.crdtproofs.VersionVector
 import org.verifx.crdtproofs.pure.TaggedOp
 import org.verifx.crdtproofs.pure.PerfectPure
 
+/*
+ * Implementation of a pure op-based Update-Wins multidigraph nested CRDT,
+ * following the specification from:
+ *   Olivier, Morcos, Didonet Del Fabro, Gerard.
+ *   "A Local-First Collaborative Modeling Approach with Replicated Data Types"
+ *   HAL https://cea.hal.science/cea-05322894v1 (2025).
+ *
+ * Supports nested CRDTs as child elements for vertices and arcs, i.e., each vertex and arc
+ * can itself be a CRDT (represented here as an abstract, correct, resettable pure CRDT).
+ * 
+ * Supports four operations:
+ * - updateVertex(v, c): adds vertex `v` to the graph and applies child op `c``
+ * - removeVertex(v): removes vertex `v` from the graph
+ * - updateArc(from, to, e, c): adds arc `e` from vertex `from` to vertex `to` and applies child op `c`
+ * - removeArc(from, to, e): removes arc `e` from vertex `from` to vertex `to`
+ */
+
 class Vertex(id: Int)
 class Arc(from: Vertex, to: Vertex, id: Int)
 
