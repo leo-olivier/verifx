@@ -39,25 +39,22 @@ class PerfectPure(polog: Set[TaggedOp[PerfectOp]]) {
   }
 }
 
-// object PerfectPure {
-//   proof PerfectPure_generic_converges {
-//     forall(
-//       map: PerfectPure,
-//       k1: String,
-//       k2: String,
-//       t1: VersionVector,
-//       t2: VersionVector,
-//       o1: PerfectOp,
-//       o2: PerfectOp
-//     ) {
-//       (t1.concurrent(t2) && map.polog.forall((e: TaggedOp[PerfectOp]) =>
-//         ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t
-//           .concurrent(t2)))
-//       )) =>: (
-//         map.applyOp(o1, t1).applyOp(o2, t2)
-//           ==
-//             map.applyOp(o2, t2).applyOp(o1, t1)
-//       )
-//     }
-//   }
-// }
+object PerfectPure {
+  proof PerfectPure_generic_converges {
+    forall(
+      map: PerfectPure,
+      k1: String,
+      k2: String,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp,
+      o2: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        map.polog.forall((e: TaggedOp[PerfectOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2)))
+      )) =>: (
+        map.applyOp(o1, t1).applyOp(o2, t2) == map.applyOp(o2, t2).applyOp(o1, t1)
+      )
+    }
+  }
+}
