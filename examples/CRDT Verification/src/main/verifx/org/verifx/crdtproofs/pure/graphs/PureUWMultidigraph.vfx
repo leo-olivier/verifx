@@ -1,0 +1,447 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.TaggedOp
+import org.verifx.crdtproofs.pure.PerfectPure
+
+class Vertex(id: Int)
+class Arc(from: Vertex, to: Vertex, id: Int)
+
+object GraphOps {
+  // Operations available on the graph
+  enum GraphOp {
+    UpdateVertex(vertex: Vertex) | RemoveVertex(vertex: Vertex) | UpdateArc(edge: Arc) | RemoveArc(edge: Arc)
+  }
+}
+
+class GraphContent(
+  arcContent: Map[Arc, PerfectPure],
+  vertexContent: Map[Vertex, PerfectPure]
+)
+
+class UWMultidigraph(
+    polog: Set[TaggedOp[GraphOp]],
+    children: GraphContent
+) {
+  // Create a new instance
+  def create(
+      polog: Set[TaggedOp[GraphOp]],
+      children: GraphContent
+  ): UWMultidigraph = new UWMultidigraph(polog, children)
+
+  // Remove operations are self redundant (their effect is to prune older ops)
+  def selfRedundant(op: TaggedOp[GraphOp], log: Set[TaggedOp[GraphOp]]): Boolean = op.o match {
+    case RemoveVertex(_) => true
+    case RemoveArc(_) => true
+    case _ => false
+  }
+
+  // A prior add becomes redundant if a later add or remove targets the same id
+  def redundantBy(x: TaggedOp[GraphOp], y: TaggedOp[GraphOp]): Boolean = {
+    x.t.before(y.t) && (y.o match {
+      // Update vertex makes prior vertex updates of the same id redundant
+      case UpdateVertex(v1) => x.o match {
+        case UpdateVertex(v2) => v1 == v2
+        case _ => false
+      }
+      // Remove vertex makes pior vertex updates of the same id redundant,
+      // and also prior arc updates involving that vertex
+      case RemoveVertex(v1) => x.o match {
+        case UpdateVertex(v2) => v1 == v2
+        case UpdateArc(a) => v1 == a.from || v1 == a.to
+        case _ => false
+      }
+      // Update arc makes prior arc updates of the same (v1, v2, e) triple id redundant
+      case UpdateArc(a1) => x.o match {
+        case UpdateArc(a2) => a1.from == a2.from && a1.to == a2.to && a1.id == a2.id
+        case _ => false
+      }
+      // Remove arc makes prior arc updates of the same (v1, v2, e) triple id redundant
+      case RemoveArc(a1) => x.o match {
+        case UpdateArc(a2) => a1.from == a2.from && a1.to == a2.to && a1.id == a2.id
+        case _ => false
+      }
+    })
+  }
+
+  // Reset the state to a given timestamp, removing all ops before (and optionally concurrent with) t
+  def reset(t: VersionVector, withConcurrent: Boolean): UWMultidigraph = {
+    val updLog = this.polog.filter((x: TaggedOp[GraphOp]) =>
+      !(x.t.before(t) || (withConcurrent && x.t.concurrent(t)))
+    )
+    val updChildren = new GraphContent(
+      this.children.arcContent.map((k: Arc, v: PerfectPure) => v.reset(t, withConcurrent)),
+      this.children.vertexContent.map((k: Vertex, v: PerfectPure) => v.reset(t, withConcurrent))
+    )
+    this.create(updLog, updChildren)
+  }
+
+  // Used for nested operations, i.e., those that have child ops (updateVertex and updateArc)
+  def effectNested(op: GraphOp, t: VersionVector, childOp: PerfectOp): Tuple[Set[TaggedOp[GraphOp]], GraphContent] = {
+    val taggedOp = new TaggedOp(t, op)
+    // Remove redundant ops from the log
+    val newLog = this.polog.filter((x: TaggedOp[GraphOp]) => !this.redundantBy(x, taggedOp))
+
+    val newVertices = taggedOp.o match {
+      case UpdateVertex(v) => {
+        // Apply the child op to the vertex content
+        val updated = this.children.vertexContent
+          .getOrElse(v, new PerfectPure(new Set[TaggedOp[PerfectOp]]()))
+          .effect(childOp, taggedOp.t)
+        // Return updated vertex content map with the updated vertex
+        this.children.vertexContent.add(v, updated)
+      }
+      case _ => this.children.vertexContent
+    }
+
+    val newArcs = taggedOp.o match {
+      case UpdateArc(arc) => {
+        // Apply the child op to the arc content
+        val updated = this.children.arcContent
+          .getOrElse(arc, new PerfectPure(new Set[TaggedOp[PerfectOp]]()))
+          .effect(childOp, taggedOp.t)
+        // Return updated arc content map with the updated arc
+        this.children.arcContent.add(arc, updated)
+      }
+      case _ => this.children.arcContent
+    }
+
+    val newChildren = new GraphContent(newArcs, newVertices)
+
+    if (this.selfRedundant(taggedOp, this.polog))
+      // If self redundant, do not add to log
+      new Tuple(newLog, newChildren)
+    else
+      // Otherwise, add to log
+      new Tuple(newLog.add(taggedOp), newChildren)
+  }
+
+  // Used for non-nested operations, i.e., those that do not have child ops (removeVertex and removeArc)
+  def effect(op: GraphOp, t: VersionVector): Tuple[Set[TaggedOp[GraphOp]], GraphContent] = {
+    val taggedOp = new TaggedOp(t, op)
+    // Remove redundant ops from the log
+    val newLog = this.polog.filter((x: TaggedOp[GraphOp]) => !this.redundantBy(x, taggedOp))
+
+    val newVertices = taggedOp.o match {
+      // For remove vertex, reset the corresponding vertex content
+      case RemoveVertex(v) => {
+        val childContent = this.children.vertexContent.getOrElse(v, new PerfectPure(new Set[TaggedOp[PerfectOp]]()))
+        this.children.vertexContent.add(v, childContent.reset(t, false))
+      }
+      case _ => this.children.vertexContent
+    }
+
+    val newArcs = taggedOp.o match {
+      // For remove arc, reset the corresponding arc content
+      case RemoveArc(arc) => {
+        val childContent = this.children.arcContent.getOrElse(arc, new PerfectPure(new Set[TaggedOp[PerfectOp]]()))
+        this.children.arcContent.add(arc, childContent.reset(t, false))
+      }
+      case RemoveVertex(v) => {
+        // When a vertex is removed, also reset all arcs connected to it
+        this.children.arcContent.map((key: Arc, value: PerfectPure) =>
+          if (key.from == v || key.to == v)
+            value.reset(taggedOp.t, false)
+          else
+            value
+        )
+      }
+      case _ => this.children.arcContent
+    }
+
+    val newChildren = new GraphContent(newArcs, newVertices)
+
+    if (this.selfRedundant(taggedOp, this.polog))
+      // If self redundant, do not add to log
+      new Tuple(newLog, newChildren)
+    else
+      // Otherwise, add to log
+      new Tuple(newLog.add(taggedOp), newChildren)
+  }
+
+  // Helper methods for common operations
+
+  def removeVertex(timestamp: VersionVector, v: Vertex): UWMultidigraph = {
+    val res = this.effect(new RemoveVertex(v), timestamp)
+    new UWMultidigraph(res.fst, res.snd)
+  }
+
+  def updateVertex(timestamp: VersionVector, v: Vertex, o: PerfectOp): UWMultidigraph = {
+    val res = this.effectNested(new UpdateVertex(v), timestamp, o)
+    new UWMultidigraph(res.fst, res.snd)
+  }
+
+  def removeArc(timestamp: VersionVector, arc: Arc): UWMultidigraph = {
+    val res = this.effect(new RemoveArc(arc), timestamp)
+    new UWMultidigraph(res.fst, res.snd)
+  }
+
+  def updateArc(timestamp: VersionVector, arc: Arc, o: PerfectOp): UWMultidigraph = {
+    val res  = this.effectNested(new UpdateArc(arc), timestamp, o)
+    new UWMultidigraph(res.fst, res.snd)
+  }
+}
+
+// There is 4 operations that can be performed on the graph.
+// This mean there is a total of n(n+1)/2=10 commutativity proofs to be done.
+object UWMultidigraph {
+  // UpdateVertex(v1, c) || UpdateVertex(v2, c) with v1, v2 existing
+  proof UWMultidigraph_vertex_update_update_converges {
+    forall(
+      g: UWMultidigraph,
+      v1: Vertex,
+      v2: Vertex,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp,
+      o2: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v1 and v2 exist in the graph
+        g.children.vertexContent.contains(v1) &&
+        g.children.vertexContent.contains(v2) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.updateVertex(t1, v1, o1).updateVertex(t2, v2, o2) == g.updateVertex(t2, v2, o2).updateVertex(t1, v1, o1)
+      )
+    }
+  }
+
+  // UpdateVertex(v1, c) || RemoveVertex(v2) with v1, v2 existing
+  proof UWMultidigraph_vertex_update_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      v1: Vertex,
+      v2: Vertex,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v1 and v2 exist in the graph
+        g.children.vertexContent.contains(v1) &&
+        g.children.vertexContent.contains(v2) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.updateVertex(t1, v1, o1).removeVertex(t2, v2) == g.removeVertex(t2, v2).updateVertex(t1, v1, o1)
+      )
+    }
+  }
+
+  // RemoveVertex(v1) || RemoveVertex(v2) with v1, v2 existing
+  proof UWMultidigraph_vertex_remove_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      v1: Vertex,
+      v2: Vertex,
+      t1: VersionVector,
+      t2: VersionVector
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v1 and v2 exist in the graph
+        g.children.vertexContent.contains(v1) &&
+        g.children.vertexContent.contains(v2) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.removeVertex(t1, v1).removeVertex(t2, v2) == g.removeVertex(t2, v2).removeVertex(t1, v1)
+      )
+    }
+  }
+
+  // UpdateArc(e1, c) || UpdateArc(e2, c) with e1, e2 existing
+  proof UWMultidigraph_arc_update_update_converges {
+    forall(
+      g: UWMultidigraph,
+      e1: Arc,
+      e2: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp,
+      o2: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // e1 and e2 exist in the graph
+        g.children.arcContent.contains(e1) &&
+        g.children.arcContent.contains(e2) &&
+        // Their vertices exist in the graph
+        g.children.vertexContent.contains(e1.from) && g.children.vertexContent.contains(e1.to) &&
+        g.children.vertexContent.contains(e2.from) && g.children.vertexContent.contains(e2.to) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.updateArc(t1, e1, o1).updateArc(t2, e2, o2) == g.updateArc(t2, e2, o2).updateArc(t1, e1, o1)
+      )
+    }
+  }
+
+  // UpdateArc(e1, c) || RemoveArc(e2) with e1, e2 existing
+  proof UWMultidigraph_arc_update_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      e1: Arc,
+      e2: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // e1 and e2 exist in the graph
+        g.children.arcContent.contains(e1) && g.children.arcContent.contains(e2) &&
+        // Their vertices exist in the graph
+        g.children.vertexContent.contains(e1.from) && g.children.vertexContent.contains(e1.to) &&
+        g.children.vertexContent.contains(e2.from) && g.children.vertexContent.contains(e2.to) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.updateArc(t1, e1, o1).removeArc(t2, e2) == g.removeArc(t2, e2).updateArc(t1, e1, o1)
+      )
+    }
+  }
+
+  // RemoveArc(e1) || RemoveArc(e2) with e1, e2 existing
+  proof UWMultidigraph_arc_remove_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      e1: Arc,
+      e2: Arc,
+      t1: VersionVector,
+      t2: VersionVector
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // e1 and e2 exist in the graph
+        g.children.arcContent.contains(e1) && g.children.arcContent.contains(e2) &&
+        // Their vertices exist in the graph
+        g.children.vertexContent.contains(e1.from) && g.children.vertexContent.contains(e1.to) &&
+        g.children.vertexContent.contains(e2.from) && g.children.vertexContent.contains(e2.to) &&
+        // The PO-Log is correct
+        g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
+          g.removeArc(t1, e1).removeArc(t2, e2) == g.removeArc(t2, e2).removeArc(t1, e1)
+      )
+    }
+  }
+
+  // UpdateVertex(v, c) || RemoveArc(e) with v, e existing
+  proof UWMultidigraph_vertex_update_arc_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      v: Vertex,
+      e: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v and e exist in the graph
+        g.children.arcContent.contains(e) && g.children.vertexContent.contains(v) &&
+        // e's vertices exist in the graph
+        g.children.vertexContent.contains(e.from) && g.children.vertexContent.contains(e.to) &&
+        // The PO-Log is correct
+        g.polog.forall((ev: TaggedOp[GraphOp]) => ((ev.t.before(t1) || ev.t.concurrent(t1)) && (ev.t.before(t2) || ev.t.concurrent(t2))))) =>: (
+          g.updateVertex(t1, v, o).removeArc(t2, e) == g.removeArc(t2, e).updateVertex(t1, v, o)
+      )
+    }
+  }
+
+  // UpdateVertex(v, c) || UpdateArc(e, c) with v, e existing
+  proof UWMultidigraph_vertex_update_arc_update_converges {
+    forall(
+      g: UWMultidigraph,
+      v: Vertex,
+      e: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o1: PerfectOp,
+      o2: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v and e exist in the graph
+        g.children.arcContent.contains(e) && g.children.vertexContent.contains(v) &&
+        // e's vertices exist in the graph
+        g.children.vertexContent.contains(e.from) && g.children.vertexContent.contains(e.to) &&
+        // The PO-Log is correct
+        g.polog.forall((ev: TaggedOp[GraphOp]) => ((ev.t.before(t1) || ev.t.concurrent(t1)) && (ev.t.before(t2) || ev.t.concurrent(t2))))) =>: (
+          g.updateVertex(t1, v, o1).updateArc(t2, e, o2) == g.updateArc(t2, e, o2).updateVertex(t1, v, o1)
+      )
+    }
+  }
+
+  // UpdateArc(e, c) || RemoveVertex(v) with v, e existing
+  proof UWMultidigraph_arc_update_vertex_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      v: Vertex,
+      e: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v and e exist in the graph
+        g.children.arcContent.contains(e) && g.children.vertexContent.contains(v) &&
+        // e's vertices exist in the graph
+        g.children.vertexContent.contains(e.from) && g.children.vertexContent.contains(e.to) &&
+        // The PO-Log is correct
+        g.polog.forall((ev: TaggedOp[GraphOp]) => ((ev.t.before(t1) || ev.t.concurrent(t1)) && (ev.t.before(t2) || ev.t.concurrent(t2))))) =>: (
+          g.updateArc(t1, e, o).removeVertex(t2, v) == g.removeVertex(t2, v).updateArc(t1, e, o)
+      )
+    }
+  }
+
+  // RemoveArc(e) || RemoveVertex(v) with v, e existing
+  proof UWMultidigraph_arc_remove_vertex_remove_converges {
+    forall(
+      g: UWMultidigraph,
+      v: Vertex,
+      e: Arc,
+      t1: VersionVector,
+      t2: VersionVector,
+      o: PerfectOp
+    ) {
+      (t1.concurrent(t2) &&
+        // Timestamps are valid
+        t1.vector.forall((v: Int) => v >= 0) &&
+        t2.vector.forall((v: Int) => v >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // v and e exist in the graph
+        g.children.arcContent.contains(e) && g.children.vertexContent.contains(v) &&
+        // e's vertices exist in the graph
+        g.children.vertexContent.contains(e.from) && g.children.vertexContent.contains(e.to) &&
+        // The PO-Log is correct
+        g.polog.forall((ev: TaggedOp[GraphOp]) => ((ev.t.before(t1) || ev.t.concurrent(t1)) && (ev.t.before(t2) || ev.t.concurrent(t2))))) =>: (
+          g.removeArc(t1, e).removeVertex(t2, v) == g.removeVertex(t2, v).removeArc(t1, e)
+      )
+    }
+  }
+}

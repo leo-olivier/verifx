@@ -1,0 +1,63 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.TaggedOp
+
+object PerfectOps {
+  enum PerfectOp {
+    SomeOperationA(x: Int) | SomeOperationB(x: Int) | SomeOperationC(x: Int)
+  }
+}
+
+class PerfectPure(polog: Set[TaggedOp[PerfectOp]]) {
+  def selfRedundant(
+      op: TaggedOp[PerfectOp],
+      log: Set[TaggedOp[PerfectOp]]
+  ): Boolean = false
+
+  def redundantBy(x: TaggedOp[PerfectOp], y: TaggedOp[PerfectOp]): Boolean = false
+
+  def applyOp(op: PerfectOp, timestamp: VersionVector) = {
+    this.effect(op, timestamp)
+  }
+
+  def reset(t: VersionVector, withConcurrent: Boolean): PerfectPure = {
+    val upd_log = this.polog.filter((x: TaggedOp[PerfectOp]) =>
+      !(x.t.before(t) || (withConcurrent && x.t.concurrent(t)))
+    )
+    new PerfectPure(upd_log)
+  }
+
+  def effect(o: PerfectOp, t: VersionVector): PerfectPure = {
+    val taggedOp = new TaggedOp(t, o)
+    val new_log = this.polog.filter((x: TaggedOp[PerfectOp]) =>
+      !this.redundantBy(x, taggedOp)
+    )
+
+    if (this.selfRedundant(taggedOp, this.polog))
+      new PerfectPure(new_log)
+    else
+      new PerfectPure(new_log.add(taggedOp))
+  }
+}
+
+// object PerfectPure {
+//   proof PerfectPure_generic_converges {
+//     forall(
+//       map: PerfectPure,
+//       k1: String,
+//       k2: String,
+//       t1: VersionVector,
+//       t2: VersionVector,
+//       o1: PerfectOp,
+//       o2: PerfectOp
+//     ) {
+//       (t1.concurrent(t2) && map.polog.forall((e: TaggedOp[PerfectOp]) =>
+//         ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t
+//           .concurrent(t2)))
+//       )) =>: (
+//         map.applyOp(o1, t1).applyOp(o2, t2)
+//           ==
+//             map.applyOp(o2, t2).applyOp(o1, t1)
+//       )
+//     }
+//   }
+// }
