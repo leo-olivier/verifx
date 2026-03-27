@@ -1,0 +1,140 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.TaggedOp
+import org.verifx.crdtproofs.pure.PerfectPure
+import org.verifx.crdtproofs.pure.maps.AbstractMap
+
+object MapOps {
+  enum MapOp {
+    Update(k: String) | Delete(k: String)
+  }
+}
+
+class UWMap(polog: Set[TaggedOp[MapOp]], children: Map[String, PerfectPure])
+    extends AbstractMap[MapOp] {
+
+  def isUpdateOn(o: MapOp, k: String): Boolean = {
+    o match {
+      case Update(kk) => k == kk
+      case _          => false
+    }
+  }
+
+  def create(
+      polog: Set[TaggedOp[MapOp]],
+      children: Map[String, PerfectPure]
+  ): UWMap = new UWMap(polog, children)
+
+  def selfRedundant(
+      op: TaggedOp[MapOp],
+      polog: Set[TaggedOp[MapOp]]
+  ): Boolean = op.o match {
+    case Delete(_) => true
+    case _         => false
+  }
+
+  def redundantBy(x: TaggedOp[MapOp], y: TaggedOp[MapOp]): Boolean = {
+    x.t.before(y.t) && (y.o match {
+      case Update(k) => this.isUpdateOn(x.o, k)
+      case Delete(k) => this.isUpdateOn(x.o, k)
+    })
+  }
+
+  def childNeedsReset(
+      child: String,
+      x: TaggedOp[MapOp]
+  ): Tuple[Boolean, Boolean] = {
+    new Tuple(
+      x.o match {
+        case Delete(k) => k == child
+        case _         => false
+      },
+      false
+    )
+  }
+
+  def delete(timestamp: VersionVector, k: String): UWMap = {
+    val res = this.effect(new Delete(k), timestamp)
+    new UWMap(res.fst, res.snd)
+  }
+
+  def update(timestamp: VersionVector, k: String, o: PerfectOp) = {
+    val res = this.nestedEffect(k, timestamp, new Update(k), o)
+    new UWMap(res.fst, res.snd)
+  }
+}
+
+// object UWMap {
+//   proof UWMap_update_update_converges {
+//     forall(
+//       map: UWMap,
+//       k1: String,
+//       k2: String,
+//       t1: VersionVector,
+//       t2: VersionVector,
+//       o1: PerfectOp,
+//       o2: PerfectOp
+//     ) {
+//       (t1.concurrent(t2) && map.children.contains(k1) && map.children.contains(
+//         k2
+//       ) &&
+//         map.polog.forall((e: TaggedOp[MapOp]) =>
+//           ((e.t.before(t1) || e.t.concurrent(t1))
+//             && (e.t.before(t2) || e.t.concurrent(t2)))
+//         )) =>: (
+//         map.update(t1, k1, o1).update(t2, k2, o2)
+//           ==
+//             map.update(t2, k2, o2).update(t1, k1, o1)
+//       )
+//     }
+//   }
+
+//   proof UWMap_update_delete_converges {
+//     forall(
+//       map: UWMap,
+//       k1: String,
+//       k2: String,
+//       t1: VersionVector,
+//       t2: VersionVector,
+//       o1: PerfectOp
+//     ) {
+//       (t1.concurrent(t2) && map.children.contains(k1) &&
+//         map.polog.forall((e: TaggedOp[MapOp]) =>
+//           ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t
+//             .concurrent(t2)))
+//         )) =>: (
+//         map.update(t1, k1, o1).delete(t2, k2)
+//           ==
+//             map.delete(t2, k2).update(t1, k1, o1)
+//       )
+//     }
+//   }
+
+//   proof VersionVector_correct {
+//     forall(t1: VersionVector, t2: VersionVector) {
+//       (t1.concurrent(t2)) =>: {
+//         !t1.before(t2) && !t2.before(t1)
+//       }
+//     }
+//   }
+
+//   proof UWMap_delete_delete_converges {
+//     forall(
+//       map: UWMap,
+//       k1: String,
+//       k2: String,
+//       t1: VersionVector,
+//       t2: VersionVector,
+//       o1: PerfectOp,
+//       o2: PerfectOp
+//     ) {
+//       (t1.concurrent(t2) && map.children.contains(k1) && map.children.contains(
+//         k2
+//       ) && map.polog.forall((e: TaggedOp[MapOp]) =>
+//         ((e.t.before(t1) || e.t.concurrent(t1))
+//           && (e.t.before(t2) || e.t.concurrent(t2)))
+//       )) =>: {
+//         map.delete(t1, k1).delete(t2, k2) == map.delete(t2, k2).delete(t1, k1)
+//       }
+//     }
+//   }
+// }

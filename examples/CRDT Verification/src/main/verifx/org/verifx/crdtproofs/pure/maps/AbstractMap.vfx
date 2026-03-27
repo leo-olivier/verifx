@@ -1,0 +1,85 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.TaggedOp
+import org.verifx.crdtproofs.pure.PerfectPure
+
+trait AbstractMap[Op] {
+  val polog: Set[TaggedOp[Op]] // state is a set of tagged operations
+  val children: Map[String, PerfectPure]
+
+  def create(
+      polog: Set[TaggedOp[Op]],
+      children: Map[String, PerfectPure]
+  ): AbstractMap[Op]
+
+  def selfRedundant(op: TaggedOp[Op], polog: Set[TaggedOp[Op]]): Boolean
+  def redundantBy(x: TaggedOp[Op], y: TaggedOp[Op]): Boolean
+
+  def childNeedsReset(child: String, x: TaggedOp[Op]): Tuple[Boolean, Boolean]
+
+  def reset(t: VersionVector, withConcurrent: Boolean): AbstractMap[Op] = {
+    val upd_log = this.polog.filter((x: TaggedOp[Op]) =>
+      !(x.t.before(t) || (withConcurrent && x.t.concurrent(t)))
+    )
+    val upd_children = this.children.map((k: String, v: PerfectPure) =>
+      v.reset(t, withConcurrent)
+    )
+    this.create(upd_log, upd_children)
+  }
+
+  def resetChildIfNeeded(
+      child_name: String,
+      child_val: PerfectPure,
+      o: TaggedOp[Op]
+  ): PerfectPure = {
+    val nr = this.childNeedsReset(child_name, o)
+    if (nr.fst)
+      child_val.reset(o.t, nr.snd)
+    else
+      child_val
+  }
+
+  def nestedEffect(
+      child: String,
+      t: VersionVector,
+      o: Op,
+      updater: PerfectOp
+  ): Tuple[Set[TaggedOp[Op]], Map[String, PerfectPure]] = {
+    val taggedOp = new TaggedOp(t, o)
+
+    val new_state = this.effect(o, t)
+
+    val new_log = new_state.fst
+    val new_children_a = new_state.snd
+
+    val new_children_b =
+      if (!this.selfRedundant(taggedOp, new_log))
+        new_children_a.add(
+          child,
+          new_children_a
+            .getOrElse(child, new PerfectPure(new Set[TaggedOp[PerfectOp]]()))
+            .effect(updater, t)
+        )
+      else
+        new_children_a
+
+    new Tuple(new_log, new_children_b)
+  }
+
+  def effect(
+      o: Op,
+      t: VersionVector
+  ): Tuple[Set[TaggedOp[Op]], Map[String, PerfectPure]] = {
+    val taggedOp = new TaggedOp(t, o)
+
+    val new_log =
+      this.polog.filter((x: TaggedOp[Op]) => !this.redundantBy(x, taggedOp))
+    val new_children = this.children.map((k: String, v: PerfectPure) =>
+      this.resetChildIfNeeded(k, v, taggedOp)
+    )
+
+    if (this.selfRedundant(taggedOp, this.polog))
+      new Tuple(new_log, new_children)
+    else
+      new Tuple(new_log.add(taggedOp), new_children)
+  }
+}
