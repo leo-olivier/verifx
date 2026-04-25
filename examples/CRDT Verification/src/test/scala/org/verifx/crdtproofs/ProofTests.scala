@@ -456,4 +456,92 @@ class ProofTests extends FlatSpec with Prover {
     val graph = ("PureMultidigraph", "is_a_CmRDT")
     prove(graph)
   }
+
+  it should "prove eval is deterministic" in {
+    val graph = ("PureMultidigraph", "PureMultidigraph_eval_deterministic")
+    prove(graph)
+  }
+
+  it should "prove visible arcs imply visible endpoints" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_eval_arc_implies_visible_endpoints"
+    )
+    prove(graph)
+  }
+
+  it should "prove missing endpoints hide arcs" in {
+    val graph =
+      ("PureMultidigraph", "PureMultidigraph_missing_endpoint_hides_arc")
+    prove(graph)
+  }
+
+  it should "prove concurrent remove hides incident arc without re-add" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_concurrent_remove_hides_incident_arc"
+    )
+    prove(graph)
+  }
+
+  ////////////////////////////////////////
+  // Pure Op-based Update-Wins MultiDiGraph CRDT //
+  ////////////////////////////////////////
+
+  "PureUWMultidigraph" should "prove vertex update-update convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_vertex_update_update_converges")
+    prove(graph)
+  }
+
+  it should "prove vertex update-remove convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_vertex_update_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove vertex remove-remove convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_vertex_remove_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove arc update-update convergence" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_arc_update_update_converges")
+    prove(graph)
+  }
+
+  it should "prove arc update-remove convergence" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_arc_update_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove arc remove-remove convergence" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_arc_remove_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove vertex update-arc remove convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_vertex_update_arc_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove vertex update-arc update convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_vertex_update_arc_update_converges")
+    prove(graph)
+  }
+
+  it should "prove arc update-vertex remove convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_arc_update_vertex_remove_converges")
+    prove(graph)
+  }
+
+  it should "prove arc remove-vertex remove convergence" in {
+    val graph =
+      ("UWMultidigraph", "UWMultidigraph_arc_remove_vertex_remove_converges")
+    prove(graph)
+  }
 }

@@ -21,6 +21,17 @@ trait Prover {
     proofRes
   }
 
+  def proveForModel(proof: ProofName, maxTries: Int = 5, timeoutInSeconds: Int = 10): ProofResult = {
+    val proofRes = pc.checkProofForModel(proof, maxTries, timeoutInSeconds*1000)
+    val failureMsg = proofRes match {
+      case rej: Rejected => s"Could not prove $proof [rejected]\nCounterexample:\n$rej"
+      case _: Aborted => s"Could not prove $proof [aborted]"
+      case _ => ""
+    }
+    assert(proofRes.isInstanceOf[Proved], failureMsg)
+    proofRes
+  }
+
   /**
    * Repeats the prove until it is proven or until the maximum number of retries has been reached.
    * @param maxTries Maximum number of retries

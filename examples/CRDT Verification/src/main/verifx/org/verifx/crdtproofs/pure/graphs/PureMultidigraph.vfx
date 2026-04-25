@@ -17,12 +17,52 @@ import org.verifx.crdtproofs.lemmas.PureCRDTProof2
  */
 
 object GraphOps {
-enum GraphOps[V, E] {
+  enum GraphOps[V, E] {
     AddVertex(id: V) | RemoveVertex(id: V) |
     AddArc(from: V, to: V, id: E) | RemoveArc(from: V, to: V, id: E)
   }
 }
 
+class Arc[V, E](from: V, to: V, id: E)
+
+/*
+ * Directed multigraph implementation. The `isValid` invariant prevents dangling arcs.
+ */
+class Multidigraph[V, E](vertices: Set[V], arcs: Set[Arc[V, E]]) {
+  def addVertex(v: V) = {
+    new Multidigraph(this.vertices.add(v), this.arcs)
+  }
+
+  def removeVertex(v: V) = {
+    new Multidigraph(
+      this.vertices.remove(v),
+      this.arcs.filter((arc: Arc[V, E]) => arc.from != v && arc.to != v)
+    )
+  }
+
+  def addArc(from: V, to: V, e: E) = {
+    if (this.containsVertex(from) && this.containsVertex(to))
+      new Multidigraph(this.vertices, this.arcs.add(new Arc(from, to, e)))
+    else
+      this
+  }
+
+  def removeArc(from: V, to: V, e: E) = {
+    new Multidigraph(this.vertices, this.arcs.remove(new Arc(from, to, e)))
+  }
+
+  def containsVertex(v: V) = this.vertices.contains(v)
+
+  def containsArc(from: V, to: V, e: E) = this.arcs.contains(new Arc(from, to, e))
+
+  def isValid() =
+    this.arcs.forall((arc: Arc[V, E]) => this.containsVertex(arc.from) && this.containsVertex(arc.to))
+}
+
+/*
+ * Pure op-based CRDT implementation of the Add-Wins multidigraph.
+ * The `eval` function computes the returned graph.
+ */
 class PureMultidigraph[V, E](polog: Set[TaggedOp[GraphOps[V, E]]])
   extends PureOpBasedCRDT[GraphOps[V, E], PureMultidigraph[V, E]] {
 
@@ -72,6 +112,142 @@ class PureMultidigraph[V, E](polog: Set[TaggedOp[GraphOps[V, E]]])
         case a: AddArc    => a.id == e
         case _ => false
       })
+
+  def visibleVertices(): Set[V] =
+    this.polog
+      .filter((op: TaggedOp[GraphOps[V, E]]) => op.o match {
+        case _: AddVertex => true
+        case _ => false
+      })
+      .map((op: TaggedOp[GraphOps[V, E]]) => op.o.asInstanceOf[AddVertex[V, E]].id)
+
+  // An arc is only visible if both of its endpoints exist as vertices
+  def visibleArcs(vertices: Set[V]): Set[Arc[V, E]] = {
+    this.polog
+      .filter((op: TaggedOp[GraphOps[V, E]]) => op.o match {
+        case a: AddArc =>
+          vertices.contains(a.from) && vertices.contains(a.to)
+        case _ => false
+      })
+      .map((op: TaggedOp[GraphOps[V, E]]) => {
+        val a = op.o.asInstanceOf[AddArc[V, E]]
+        new Arc(a.from, a.to, a.id)
+      })
+  }
+
+  // The evaluated graph consists of all visible vertices and arcs
+  def eval(): Multidigraph[V, E] = {
+    val vertices = this.visibleVertices()
+    new Multidigraph(vertices, this.visibleArcs(vertices))
+  }
+
+  // Helper functions for operations
+
+  def removeVertex(v: V, t: VersionVector) =
+    this.effect(new RemoveVertex[V, E](v), t)
+
+  def addArc(src: V, dst: V, e: E, t: VersionVector) =
+    this.effect(new AddArc[V, E](src, dst, e), t)
+
+  def removeArc(src: V, dst: V, e: E, t: VersionVector) =
+    this.effect(new RemoveArc[V, E](src, dst, e), t)
+
+  def addVertex(v: V, t: VersionVector) =
+    this.effect(new AddVertex[V, E](v), t)
 }
 
-object PureMultidigraph extends PureCRDTProof2[GraphOps, PureMultidigraph]
+// PureCRDTProof2 proves that concurrent update operations commute
+object PureMultidigraph extends PureCRDTProof2[GraphOps, PureMultidigraph] {
+  // The following proofs capture the intended semantics of the Add-Wins multidigraph CRDT, as specified in the paper.
+
+  /*
+   * If two replicas expose the same PO-Log, then evaluating that log must produce the same graph.
+   * In other words, the query results does not depend on the delivery schedule and
+   * is deterministic based on the replicated state.
+   */
+  proof PureMultidigraph_eval_deterministic {
+    forall(
+      g1: PureMultidigraph[Int, Int],
+      g2: PureMultidigraph[Int, Int],
+    ) {
+      (g1.polog == g2.polog) =>: (
+        g1.eval() == g2.eval() &&
+        g1.eval().isValid() &&
+        g2.eval().isValid()
+      )
+    }
+  }
+
+  /*
+   * An arc can only be visible in the evaluated graph when both of its endpoints are visible as vertices.
+   * I.e., dangling arcs are hidden, and the invariant A ⊆ V × V × E holds in the evaluated graph.
+   */
+  proof PureMultidigraph_eval_arc_implies_visible_endpoints {
+    forall(
+      g: PureMultidigraph[Int, Int],
+      src: Int,
+      dst: Int,
+      edge: Int,
+    ) {
+      g.eval().containsArc(src, dst, edge) =>: (
+        g.eval().containsVertex(src) &&
+        g.eval().containsVertex(dst)
+      )
+    }
+  }
+
+  /*
+   * This is the contrapositive read rule of the previous lemma: if a vertex is absent,
+   * then any arc incident to that vertex must also be absent from the evaluated graph.
+   * This property is used to show that concurrent removals preserve graph well-formedness
+   * without deleting the arc from the PO-Log.
+   */
+  proof PureMultidigraph_missing_endpoint_hides_arc {
+    forall(
+      g: PureMultidigraph[Int, Int],
+      src: Int,
+      dst: Int,
+      edge: Int,
+    ) {
+      (!g.eval().containsVertex(src) || !g.eval().containsVertex(dst)) =>: (
+        g.eval().containsArc(src, dst, edge) == false
+      )
+    }
+  }
+
+  /*
+   * If a vertex is removed concurrently with the addition of an incident arc, and there is no
+   * concurrent add of the same vertex, then the remove hides the arc from the evaluated graph.
+   */
+  proof PureMultidigraph_concurrent_remove_hides_incident_arc {
+    forall(
+      g: PureMultidigraph[Int, Int],
+      tRemove: VersionVector,
+      tAddArc: VersionVector,
+      src: Int,
+      dst: Int,
+      edge: Int,
+      vertex: Int,
+    ) {
+      (tRemove.concurrent(tAddArc) &&
+        // Vectors are well-formed and of the same size
+        tRemove.vector.forall((n: Int) => n >= 0) &&
+        tAddArc.vector.forall((n: Int) => n >= 0) &&
+        tRemove.vector.size == tAddArc.vector.size &&
+        // The vertex is the source or destination of the arc, and both endpoints exist in the evaluated graph
+        (src == vertex || dst == vertex) &&
+        g.eval().containsVertex(src) &&
+        g.eval().containsVertex(dst) &&
+        // There is no concurrent add of the same vertex
+        g.polog.forall((op: TaggedOp[GraphOps[Int, Int]]) => op.o match {
+          case AddVertex(id) => id != vertex || op.t.before(tRemove)
+          case _ => true
+        })
+      ) =>: (
+        // The concurrent add of the arc is hidden from the evaluated graph, even though it remains in the PO-Log
+        g.removeVertex(vertex, tRemove).addArc(src, dst, edge, tAddArc).eval().containsArc(src, dst, edge) == false
+        && g.addArc(src, dst, edge, tAddArc).removeVertex(vertex, tRemove).eval().containsArc(src, dst, edge) == false
+      )
+    }
+  }
+}
