@@ -57,4 +57,22 @@ object PerfectPure {
       )
     }
   }
+
+  proof PerfectPure_reset_conservative_converges {
+    forall(p: PerfectPure, t1: VersionVector, t2: VersionVector) {
+      t1.concurrent(t2) =>: (
+        p.reset(t1, false).reset(t2, false) ==
+        p.reset(t2, false).reset(t1, false)
+      )
+    }
+  }
+
+  proof PerfectPure_reset_non_conservative_converges {
+    forall(p: PerfectPure, t1: VersionVector, t2: VersionVector) {
+      t1.concurrent(t2) =>: (
+        p.reset(t1, true).reset(t2, true) ==
+        p.reset(t2, true).reset(t1, true)
+      )
+    }
+  }
 }

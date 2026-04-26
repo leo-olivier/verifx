@@ -198,7 +198,7 @@ class UWMultidigraph(
 }
 
 // There is 4 operations that can be performed on the graph.
-// This mean there is a total of n(n+1)/2=10 commutativity proofs to be done.
+// This mean there is a total of n(n+1)/2 = 10 commutativity proofs to be done.
 object UWMultidigraph {
   // UpdateVertex(v1, c) || UpdateVertex(v2, c) with v1, v2 existing
   proof UWMultidigraph_vertex_update_update_converges {
@@ -270,7 +270,8 @@ object UWMultidigraph {
         g.children.vertexContent.contains(v2) &&
         // The PO-Log is correct
         g.polog.forall((e: TaggedOp[GraphOp]) => ((e.t.before(t1) || e.t.concurrent(t1)) && (e.t.before(t2) || e.t.concurrent(t2))))) =>: (
-          g.removeVertex(t1, v1).removeVertex(t2, v2) == g.removeVertex(t2, v2).removeVertex(t1, v1)
+          g.removeVertex(t1, v1).removeVertex(t2, v2).polog == g.removeVertex(t2, v2).removeVertex(t1, v1).polog
+          && g.removeVertex(t1, v1).removeVertex(t2, v2).children == g.removeVertex(t2, v2).removeVertex(t1, v1).children
       )
     }
   }
@@ -444,7 +445,6 @@ object UWMultidigraph {
       e: Arc,
       t1: VersionVector,
       t2: VersionVector,
-      o: PerfectOp
     ) {
       (t1.concurrent(t2) &&
         // Timestamps are valid

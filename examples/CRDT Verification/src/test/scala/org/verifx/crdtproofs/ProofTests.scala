@@ -485,6 +485,25 @@ class ProofTests extends FlatSpec with Prover {
   }
 
   ////////////////////////////////////////
+  // Perfect, Abstract, Resettable Pure CRDT //
+  ////////////////////////////////////////
+
+  "PerfectPure" should "prove conservative reset converges" in {
+    val proof = ("PerfectPure", "PerfectPure_reset_conservative_converges")
+    prove(proof)
+  }
+
+  it should "prove non-conservative reset converges" in {
+    val proof = ("PerfectPure", "PerfectPure_reset_non_conservative_converges")
+    prove(proof)
+  }
+
+  it should "prove generic convergence" in {
+    val proof = ("PerfectPure", "PerfectPure_generic_converges")
+    prove(proof)
+  }
+
+  ////////////////////////////////////////
   // Pure Op-based Update-Wins MultiDiGraph CRDT //
   ////////////////////////////////////////
 
