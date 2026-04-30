@@ -172,6 +172,7 @@ class ScalaCompilerPlugin extends Plugin[ScalaExp, ScalaExp, ClassTable] {
         Op.Minus -> "-",
         Op.Times -> "*",
         Op.Divide -> "/",
+        Op.Modulo -> "%",
         Op.And -> "&&",
         Op.Or -> "||",
         Op.Equals -> "==",
