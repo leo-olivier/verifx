@@ -285,7 +285,7 @@ object CompilerUtil {
   def isComparisonOperator(op: String) = isArithmeticComparisonOperator(op) || op == "==" || op == "!="
   def isArithmeticComparisonOperator(op: String) = op == "<" || op == "<=" || op == ">" || op == ">="
   def isBooleanOperator(op: String) = op == "||" || op == "&&"
-  def isArithmeticOperator(op: String) = op == "+" || op == "-" || op == "*" || op == "/"
+  def isArithmeticOperator(op: String) = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
   def isLogicOperator(op: String) = op == "=>:"
 
   def isValueOrMethodOrPredicate(stat: Stat): Boolean = {
@@ -674,7 +674,7 @@ case class MethodBody(var env: Map[String, Type])(implicit val thisClass: Type, 
     val operators = Map(
       "||" -> q"Op.Or", "&&" -> q"Op.And",
       "==" -> q"Op.Equals", "!=" -> q"Op.NotEquals",
-      "+"  -> q"Op.Plus", "-"  -> q"Op.Minus", "*"  -> q"Op.Times", "/"  -> q"Op.Divide",
+      "+"  -> q"Op.Plus", "-"  -> q"Op.Minus", "*"  -> q"Op.Times", "/"  -> q"Op.Divide", "%" -> q"Op.Modulo",
       "<"  -> q"Op.SmallerThan", "<=" -> q"Op.SmallerOrEqual", ">"  -> q"Op.BiggerThan", ">=" -> q"Op.BiggerOrEqual")
 
     operators.get(op.value) match {

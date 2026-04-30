@@ -15,6 +15,22 @@ class ClassTest extends FlatSpec {
     }
   }
 
+  it should "support modulo on integers" in {
+    val moduloProgram =
+      """class Test {
+           def mod(a: Int, b: Int) = a % b
+         }""".stripMargin
+
+    val scalaCode = ProgramCompiler(moduloProgram)
+      .compileToLanguage(new ScalaCompilerPlugin)
+      ._2
+    val z3Code =
+      ProgramCompiler(moduloProgram).compileToLanguage(new Z3CompilerPlugin)._2
+
+    assert(scalaCode.contains("%"))
+    assert(z3Code.contains("%"))
+  }
+
   it should "support objects" in {
     val obj =
       """object Test {
