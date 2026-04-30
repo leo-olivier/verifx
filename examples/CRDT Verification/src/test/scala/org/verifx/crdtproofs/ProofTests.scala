@@ -563,4 +563,47 @@ class ProofTests extends FlatSpec with Prover {
       ("UWMultidigraph", "UWMultidigraph_arc_remove_vertex_remove_converges")
     prove(graph)
   }
+
+  ////////////////////////////////////////
+  // Fair Register CRDT //
+  ////////////////////////////////////////
+
+  "FairRegister" should "return at most one value" in {
+    val register = ("FairRegister", "FairRegister_returns_at_most_one_value")
+    prove(register)
+  }
+
+  it should "return the most recent write" in {
+    val register = ("FairRegister", "FairRegister_returns_most_recent_write")
+    prove(register)
+  }
+
+  it should "have a total compare order" in {
+    val register = ("FairRegister", "FairRegister_compare_totality")
+    prove(register)
+  }
+
+  it should "have an asymmetric compare order" in {
+    val register = ("FairRegister", "FairRegister_compare_is_asymmetric")
+    prove(register)
+  }
+
+  it should "have a transitive compare order" in {
+    val register = ("FairRegister", "FairRegister_compare_is_transitive")
+    prove(register)
+  }
+
+  it should "show each replica wins infinitely many rounds" in {
+    val register =
+      (
+        "FairRegister",
+        "FairRegister_each_replica_can_win_infinitely_many_rounds"
+      )
+    prove(register)
+  }
+
+  it should "converge" in {
+    val register = ("FairRegister", "Fair_register_convergence")
+    prove(register)
+  }
 }
