@@ -1,7 +1,7 @@
 import org.verifx.crdtproofs.LamportClock
 
 object RegisterOps {
-    // A register has a single `write` operation
+    // A register has a single `write` operation.
     enum RegisterOp {
         Write(value: Int)
     }
@@ -11,9 +11,9 @@ class TaggedOp(t: LamportClock, o: RegisterOp)
 
 class History(ops: Set[TaggedOp])
 
-// Fairness is a nice property that ensure that all replicas can eventually have their writes selected.
-// history is a partially ordered set of updates
-// membership is the number of replicas in the system
+// Fairness ensures that every replica can eventually have one of its writes selected.
+// The history is a partially ordered set of updates.
+// `membership` is the number of replicas in the system.
 class FairRegister(history: History, membership: Int) {
     def append(taggedOp: TaggedOp): FairRegister = {
         val newHistory = new History(
@@ -22,9 +22,9 @@ class FairRegister(history: History, membership: Int) {
         new FairRegister(newHistory, this.membership)
     }
 
-    // Returns true if t1 < t2
-    // the winner is the participating replica with the smallest positive rank,
-    // i.e. the one nearest to the leader in the round-robin order.
+    // Returns true if `t1` precedes `t2`.
+    // The winning replica is the participating replica with the smallest positive rank,
+    // i.e. the replica closest to the leader in round-robin order.
     def compare(t1: LamportClock, t2: LamportClock): Boolean = {
         t1.counter < t2.counter || (t1.counter == t2.counter && this.rank(t1) < this.rank(t2))
     }
@@ -54,9 +54,9 @@ class FairRegister(history: History, membership: Int) {
 
 object FairRegister {
     //* Uniqueness
-    // For all fair register causal history, given two values x, y, if the set returned
-    // by a query contains both x and y, then x = y.
-    //! VeriFx does not expose a general method to get the size of a set.
+    // For every causal history of a fair register and any two values `x` and `y`,
+    // if a query returns both `x` and `y`, then `x = y`.
+    //! VeriFx does not expose a general method for obtaining the size of a set.
     proof FairRegister_returns_at_most_one_value {
         forall(
             r: FairRegister,
@@ -70,7 +70,7 @@ object FairRegister {
     }
 
     //* Validity
-    // FairRegister does not return values that were not written.
+    // A fair register does not return values that were not written.
     proof FairRegister_returns_only_written_values {
         forall(
             r: FairRegister,
@@ -82,9 +82,10 @@ object FairRegister {
         }
     }
 
-    //* Validity
-    // for all fair register causal history, given two updates u, u', if u is returned 
-    // by a query, then either u = u' or u is more recent than u' according to the `compare` function.
+    //* Recency
+    // For every causal history of a fair register and any two updates `u` and `u'`,
+    // if `u` is returned by a query, then either `u = u'` or `u` is more recent
+    // than `u'` according to the `compare` function.
     proof FairRegister_returns_most_recent_write {
         forall(
             r: FairRegister,
@@ -100,13 +101,13 @@ object FairRegister {
     }
 
     //* Total order
-    //  Proof that compare is a total order over valid lamport clocks, i.e. it is:
+    // Proof that `compare` is a total order over valid Lamport clocks, i.e. it is:
     // - reflexive
     // - antisymmetric
     // - transitive
     // - strongly connected
 
-    // Compare is a strongly connected order
+    // `compare` is a strongly connected order.
     proof FairRegister_compare_totality {
         forall(
             r: FairRegister,
@@ -119,7 +120,7 @@ object FairRegister {
         }
     }
 
-    // Compare is an antisymmetric order
+    // `compare` is an asymmetric order.
     proof FairRegister_compare_is_asymmetric {
         forall(
             r: FairRegister,
@@ -132,7 +133,7 @@ object FairRegister {
         }
     }
 
-    // Compare is a transitive order
+    // `compare` is a transitive order.
     proof FairRegister_compare_is_transitive {
         forall(
             r: FairRegister,
@@ -151,16 +152,16 @@ object FairRegister {
         }
     }
 
-    //* Fairness: 
-    // For all causal histories of a fair register r, all replicas i, and all positive integer n,
-    // there exists a lamport clock c >= n such that replica i wins the conflict
-    // against any other replica j with the same clock
-    //! NB: This is weak notion of fairness, because it only ensures that there is no
-    //! replica that is always ranked last, whatever the value of the counter.
-    //! However, the counter can still be used to starve a replica, by always picking
-    //! a value of the counter that ranks it last. Assuming no Byzantine beahvior,
-    //! the value of the counter is determined only by the execution and scheduling of operations,
-    //! and is not under the control of any replica.
+    //* Fairness
+    // For every causal history of a fair register `r`, every replica `i`, and every
+    // non-negative integer `n`, there exists a Lamport clock `c >= n` such that
+    // replica `i` wins the conflict against every other replica `j` with the same counter.
+    //! NB: This is a weak notion of fairness because it only ensures that no replica
+    //! is always ranked last, regardless of the counter value.
+    //! However, the counter can still be used to starve a replica by always choosing
+    //! a counter value that ranks it last. Assuming no Byzantine behavior, the counter
+    //! value is determined only by the execution and scheduling of operations and is
+    //! not under the control of any replica.
     proof FairRegister_each_replica_can_win_infinitely_many_rounds {
         forall(r: FairRegister, i: Int, n: Int) {
             (r.membership > 0 && r.validReplica(i) && n >= 0) =>:
@@ -177,8 +178,8 @@ object FairRegister {
     }
 
     //* Convergence
-    // For all fair register causal history, given two replicas r1, r2 with the same set of operations
-    // in their history, then r1 and r2 return the same value.
+    // For any two fair-register replicas `r1` and `r2` with the same set of operations
+    // in their histories, `r1` and `r2` return the same value.
     proof Fair_register_convergence {
         forall(
             r1: FairRegister,
