@@ -82,7 +82,7 @@ object FairRegister {
         }
     }
 
-    //* Recency
+    //* Validity
     // For every causal history of a fair register and any two updates `u` and `u'`,
     // if `u` is returned by a query, then either `u = u'` or `u` is more recent
     // than `u'` according to the `compare` function.
