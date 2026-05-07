@@ -10,13 +10,14 @@ The source code for the implementation of the different CRDTs can be found under
 That directory contains several other directories for counter CRDTs, set CRDTs, etc.
 The table below contains all implemented CRDTs and specifies the type of CRDT and the path to the file in which they are defined.
 The types are:
+
 - S: state-based CRDT
 - D: delta state-based CRDT
 - O: operation-based CRDT
 - P: pure operation-based CRDT
 
 | CRDT                                       | Type | File                                   |
-|--------------------------------------------|------|----------------------------------------|
+| ------------------------------------------ | ---- | -------------------------------------- |
 | Counter                                    | O    | counters/Counter.vfx                   |
 | Grow-Only Counter                          | S    | counters/GCounter.vfx                  |
 | Grow-Only Counter                          | D    | counters/DeltaGCounter.vfx             |
@@ -37,6 +38,7 @@ The types are:
 | Multi-Value Register                       | P    | pure/registers/PureMVRegister.vfx      |
 | Last-Writer-Wins Register                  | S    | registers/LWWRegister.vfx              |
 | Last-Writer-Wins Register                  | O    | registers/OpBasedLWWRegister.vfx       |
+| FairRegister                               | O    | registers/FairRegister.vfx             |
 | Grow-Only Set                              | O    | sets/OpBasedGSet.vfx                   |
 | Grow-Only Set                              | S    | sets/GSet.vfx                          |
 | Grow-Only Set                              | D    | sets/DeltaGSet.vfx                     |
@@ -76,7 +78,7 @@ In that directory you will find several VeriFx source code files.
 The table below shows in which file each of the transformation functions is implemented.
 
 | Transformation Function | File                |
-|-------------------------|---------------------|
+| ----------------------- | ------------------- |
 | Ellis and Gibbs         | Ellis.vfx           |
 | Ressel et al.           | Ressel.vfx          |
 | Sun et al.              | Sun.vfx             |
