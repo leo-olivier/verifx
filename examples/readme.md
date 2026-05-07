@@ -38,6 +38,7 @@ The types are:
 | Multi-Value Register                       | P    | pure/registers/PureMVRegister.vfx      |
 | Last-Writer-Wins Register                  | S    | registers/LWWRegister.vfx              |
 | Last-Writer-Wins Register                  | O    | registers/OpBasedLWWRegister.vfx       |
+| FairRegister                               | O    | registers/FairRegister.vfx             |
 | Grow-Only Set                              | O    | sets/OpBasedGSet.vfx                   |
 | Grow-Only Set                              | S    | sets/GSet.vfx                          |
 | Grow-Only Set                              | D    | sets/DeltaGSet.vfx                     |

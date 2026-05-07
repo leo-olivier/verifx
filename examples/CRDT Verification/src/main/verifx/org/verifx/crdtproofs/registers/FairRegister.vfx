@@ -2,20 +2,20 @@ import org.verifx.crdtproofs.LamportClock
 
 object RegisterOps {
     // A register has a single `write` operation.
-    enum RegisterOp {
-        Write(value: Int)
+    enum RegisterOp[V] {
+        Write(value: V)
     }
 }
 
-class TaggedOp(t: LamportClock, o: RegisterOp)
+class TaggedOp[V](t: LamportClock, o: RegisterOp[V])
 
-class History(ops: Set[TaggedOp])
+class History[V](ops: Set[TaggedOp[V]])
 
 // Fairness ensures that every replica can eventually have one of its writes selected.
 // The history is a partially ordered set of updates.
 // `membership` is the number of replicas in the system.
-class FairRegister(history: History, membership: Int) {
-    def append(taggedOp: TaggedOp): FairRegister = {
+class FairRegister[V](history: History[V], membership: Int) {
+    def append(taggedOp: TaggedOp[V]): FairRegister[V] = {
         val newHistory = new History(
             this.history.ops.add(taggedOp)
         )
@@ -35,9 +35,9 @@ class FairRegister(history: History, membership: Int) {
         (idx + this.membership - leader) % this.membership
     }
 
-    def read(): Set[TaggedOp] = {
-        this.history.ops.filter((taggedOp: TaggedOp) =>
-            this.history.ops.forall((to: TaggedOp) =>
+    def read(): Set[TaggedOp[V]] = {
+        this.history.ops.filter((taggedOp: TaggedOp[V]) =>
+            this.history.ops.forall((to: TaggedOp[V]) =>
                 to == taggedOp || this.compare(to.t, taggedOp.t)
             )
         )
@@ -57,11 +57,11 @@ object FairRegister {
     // For every causal history of a fair register and any two values `x` and `y`,
     // if a query returns both `x` and `y`, then `x = y`.
     //! VeriFx does not expose a general method for obtaining the size of a set.
-    proof FairRegister_returns_at_most_one_value {
+    proof FairRegister_returns_at_most_one_value[V] {
         forall(
-            r: FairRegister,
-            x: TaggedOp,
-            y: TaggedOp
+            r: FairRegister[V],
+            x: TaggedOp[V],
+            y: TaggedOp[V]
         ) {
             (r.read().contains(x) && r.read().contains(y)) =>: (
                 x == y
@@ -71,10 +71,10 @@ object FairRegister {
 
     //* Validity
     // A fair register does not return values that were not written.
-    proof FairRegister_returns_only_written_values {
+    proof FairRegister_returns_only_written_values[V] {
         forall(
-            r: FairRegister,
-            x: TaggedOp
+            r: FairRegister[V],
+            x: TaggedOp[V]
         ) {
             (r.read().contains(x)) =>: (
                 r.history.ops.contains(x)
@@ -86,11 +86,11 @@ object FairRegister {
     // For every causal history of a fair register and any two updates `u` and `u'`,
     // if `u` is returned by a query, then either `u = u'` or `u` is more recent
     // than `u'` according to the `compare` function.
-    proof FairRegister_returns_most_recent_write {
+    proof FairRegister_returns_most_recent_write[V] {
         forall(
-            r: FairRegister,
-            chosen: TaggedOp,
-            candidate: TaggedOp
+            r: FairRegister[V],
+            chosen: TaggedOp[V],
+            candidate: TaggedOp[V]
         ) {
             (r.read().contains(chosen)
             && r.history.ops.contains(chosen)
@@ -108,9 +108,9 @@ object FairRegister {
     // - strongly connected
 
     // `compare` is a strongly connected order.
-    proof FairRegister_compare_totality {
+    proof FairRegister_compare_totality[V] {
         forall(
-            r: FairRegister,
+            r: FairRegister[V],
             t1: LamportClock,
             t2: LamportClock
         ) {
@@ -121,9 +121,9 @@ object FairRegister {
     }
 
     // `compare` is an asymmetric order.
-    proof FairRegister_compare_is_asymmetric {
+    proof FairRegister_compare_is_asymmetric[V] {
         forall(
-            r: FairRegister,
+            r: FairRegister[V],
             t1: LamportClock,
             t2: LamportClock
         ) {
@@ -134,9 +134,9 @@ object FairRegister {
     }
 
     // `compare` is a transitive order.
-    proof FairRegister_compare_is_transitive {
+    proof FairRegister_compare_is_transitive[V] {
         forall(
-            r: FairRegister,
+            r: FairRegister[V],
             t1: LamportClock,
             t2: LamportClock,
             t3: LamportClock
@@ -162,8 +162,8 @@ object FairRegister {
     //! a counter value that ranks it last. Assuming no Byzantine behavior, the counter
     //! value is determined only by the execution and scheduling of operations and is
     //! not under the control of any replica.
-    proof FairRegister_each_replica_can_win_infinitely_many_rounds {
-        forall(r: FairRegister, i: Int, n: Int) {
+    proof FairRegister_each_replica_can_win_infinitely_many_rounds[V] {
+        forall(r: FairRegister[V], i: Int, n: Int) {
             (r.membership > 0 && r.validReplica(i) && n >= 0) =>:
                 exists(c: Int) {
                     c == i + n * r.membership &&
@@ -180,10 +180,10 @@ object FairRegister {
     //* Convergence
     // For any two fair-register replicas `r1` and `r2` with the same set of operations
     // in their histories, `r1` and `r2` return the same value.
-    proof Fair_register_convergence {
+    proof Fair_register_convergence[V] {
         forall(
-            r1: FairRegister,
-            r2: FairRegister
+            r1: FairRegister[V],
+            r2: FairRegister[V]
         ) {
             (r1 == r2) =>: (
                 r1.read() == r2.read()
