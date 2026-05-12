@@ -476,4 +476,14 @@ class ProofTests extends FlatSpec with Prover {
     )
     proofs.foreach(proof => prove(proof))
   }
+
+  it should "prove read is deterministic" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_deterministic_read")
+    prove(graph)
+  }
+
+  it should "prove visible arcs implies visible endpoints" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_validity")
+    prove(graph)
+  }
 }
