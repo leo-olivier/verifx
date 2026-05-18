@@ -28,7 +28,7 @@ class ClassTest extends FlatSpec {
       ProgramCompiler(moduloProgram).compileToLanguage(new Z3CompilerPlugin)._2
 
     assert(scalaCode.contains("%"))
-    assert(z3Code.contains("%"))
+    assert(z3Code.contains("(mod a b)"))
   }
 
   it should "support objects" in {
