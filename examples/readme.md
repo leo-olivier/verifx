@@ -65,6 +65,7 @@ The types are:
 | 2P2P Graph                                 | S    | graphs/TwoPTwoPGraphSB.vfx             |
 | Add-Only Directed Acyclic Graph            | O    | graphs/AddOnlyDAG.vfx                  |
 | Add-Only Directed Acyclic Graph            | S    | graphs/AddOnlyDAGSB.vfx                |
+| Add-Wins Multidigraph                      | P    | graphs/PureMultidigraph.vfx            |
 | Add-Remove Partial Order                   | O    | graphs/AddRemovePartialOrder.vfx       |
 | Add-Remove Partial Order                   | S    | graphs/AddRemovePartialOrderSB.vfx     |
 | Replicated Growable Array (not verified)   | O    | sequences/RGA.vfx                      |
