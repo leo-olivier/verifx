@@ -496,7 +496,7 @@ class ProofTests extends FlatSpec with Prover {
   }
 
   it should "converge" in {
-    val register = ("FairRegister", "Fair_register_convergence")
+    val register = ("FairRegister", "is_a_CmRDT")
     prove(register)
   }
 }

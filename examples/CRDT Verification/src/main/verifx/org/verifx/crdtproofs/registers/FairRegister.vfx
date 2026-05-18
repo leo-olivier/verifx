@@ -1,4 +1,6 @@
 import org.verifx.crdtproofs.LamportClock
+import org.verifx.crdtproofs.lemmas.CmRDT
+import org.verifx.crdtproofs.lemmas.CmRDTProof1
 
 object RegisterOps {
     // A register has a single `write` operation.
@@ -14,12 +16,33 @@ class History[V](ops: Set[TaggedOp[V]])
 // Fairness ensures that every replica can eventually have one of its writes selected.
 // The history is a partially ordered set of updates.
 // `membership` is the number of replicas in the system.
-class FairRegister[V](history: History[V], membership: Int) {
-    def append(taggedOp: TaggedOp[V]): FairRegister[V] = {
+class FairRegister[V](clock: LamportClock, history: History[V], membership: Int) extends CmRDT[RegisterOp[V], TaggedOp[V], FairRegister[V]] {
+    override def reachable(): Boolean =
+        this.membership > 0 && this.validClock(this.clock)
+
+    override def compatibleS(that: FairRegister[V]): Boolean =
+        this.membership == that.membership && this.clock.replica != that.clock.replica
+
+    def write(value: V): TaggedOp[V] =
+        new TaggedOp(this.clock.increment(), new Write(value))
+
+    def prepare(op: RegisterOp[V]): TaggedOp[V] = op match {
+        case Write(value) => this.write(value)
+    }
+
+    def effect(msg: TaggedOp[V]): FairRegister[V] =
+        this.append(msg)
+
+    private def append(taggedOp: TaggedOp[V]): FairRegister[V] = {
         val newHistory = new History(
             this.history.ops.add(taggedOp)
         )
-        new FairRegister(newHistory, this.membership)
+        val newClock =
+            if (this.clock.replica == taggedOp.t.replica)
+                taggedOp.t
+            else
+                this.clock
+        new FairRegister(newClock, newHistory, this.membership)
     }
 
     // Returns true if `t1` precedes `t2`.
@@ -50,9 +73,12 @@ class FairRegister[V](history: History[V], membership: Int) {
 
     def validClock(t: LamportClock): Boolean =
         t.counter >= 0 && this.validReplica(t.replica)
+
+    override def equals(that: FairRegister[V]): Boolean =
+        this.history == that.history && this.membership == that.membership
 }
 
-object FairRegister {
+object FairRegister extends CmRDTProof1[RegisterOp, TaggedOp, FairRegister] {
     //* Uniqueness
     // For every causal history of a fair register and any two values `x` and `y`,
     // if a query returns both `x` and `y`, then `x = y`.
@@ -174,20 +200,6 @@ object FairRegister {
                         )
                     }
                 }
-        }
-    }
-
-    //* Convergence
-    // For any two fair-register replicas `r1` and `r2` with the same set of operations
-    // in their histories, `r1` and `r2` return the same value.
-    proof Fair_register_convergence[V] {
-        forall(
-            r1: FairRegister[V],
-            r2: FairRegister[V]
-        ) {
-            (r1 == r2) =>: (
-                r1.read() == r2.read()
-            )
         }
     }
 }
