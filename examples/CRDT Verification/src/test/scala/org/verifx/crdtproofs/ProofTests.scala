@@ -457,6 +457,7 @@ class ProofTests extends FlatSpec with Prover {
     prove(graph)
   }
 
+<<<<<<< main
   ////////////////////////////////////////
   // Pure Op-based Update-Wins MultiDiGraph CRDT //
   ////////////////////////////////////////
@@ -484,6 +485,42 @@ class ProofTests extends FlatSpec with Prover {
 
   it should "prove visible arcs implies visible endpoints" in {
     val graph = ("UWMultidigraph", "UWMultidigraph_validity")
+=======
+  it should "prove eval is deterministic" in {
+    val graph = ("PureMultidigraph", "PureMultidigraph_eval_deterministic")
+    prove(graph)
+  }
+
+  it should "prove visible arcs imply visible endpoints" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_eval_arc_implies_visible_endpoints"
+    )
+    prove(graph)
+  }
+
+  it should "prove concurrent add arc survives remove arc" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_concurrent_add_arc_survives_remove_arc"
+    )
+    prove(graph)
+  }
+
+  it should "prove visible arc if no later remove of the same arc" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_added_arc_visible_when_not_removed_later"
+    )
+    prove(graph)
+  }
+
+  it should "prove concurrent remove hides incident arc" in {
+    val graph = (
+      "PureMultidigraph",
+      "PureMultidigraph_concurrent_remove_hides_incident_arc"
+    )
+>>>>>>> main
     prove(graph)
   }
 }
