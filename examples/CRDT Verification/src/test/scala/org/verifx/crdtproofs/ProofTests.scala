@@ -444,8 +444,8 @@ class ProofTests extends FlatSpec with Prover {
   ////////////////////////////////////////
 
   "PureRWSet" should "converge" in {
-    val awSet = ("PureRWSet", "is_a_CmRDT")
-    prove(awSet)
+    val rwSet = ("PureRWSet", "is_a_CmRDT")
+    prove(rwSet)
   }
 
   ////////////////////////////////////////
@@ -491,6 +491,36 @@ class ProofTests extends FlatSpec with Prover {
       "PureMultidigraph",
       "PureMultidigraph_concurrent_remove_hides_incident_arc"
     )
+    prove(graph)
+  }
+
+  ////////////////////////////////////////
+  // Pure Op-based Update-Wins MultiDiGraph CRDT //
+  ////////////////////////////////////////
+
+  "PureUWMultidigraph" should "converge" in {
+    val proofs = List(
+      ("UWMultidigraph", "UWMultidigraph_update_update_vertex"),
+      ("UWMultidigraph", "UWMultidigraph_update_remove_vertex"),
+      ("UWMultidigraph", "UWMultidigraph_update_vertex_update_arc"),
+      ("UWMultidigraph", "UWMultidigraph_update_vertex_remove_arc"),
+      ("UWMultidigraph", "UWMultidigraph_remove_vertex_remove_vertex"),
+      ("UWMultidigraph", "UWMultidigraph_remove_vertex_update_arc"),
+      ("UWMultidigraph", "UWMultidigraph_remove_vertex_remove_arc"),
+      ("UWMultidigraph", "UWMultidigraph_update_arc_update_arc"),
+      ("UWMultidigraph", "UWMultidigraph_update_arc_remove_arc"),
+      ("UWMultidigraph", "UWMultidigraph_remove_arc_remove_arc"),
+    )
+    proofs.foreach(proof => prove(proof))
+  }
+
+  it should "prove read is deterministic" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_deterministic_read")
+    prove(graph)
+  }
+
+  it should "prove visible arcs implies visible endpoints" in {
+    val graph = ("UWMultidigraph", "UWMultidigraph_validity")
     prove(graph)
   }
 }
