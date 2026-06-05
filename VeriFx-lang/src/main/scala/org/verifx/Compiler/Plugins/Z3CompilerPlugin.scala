@@ -558,6 +558,7 @@ class Z3CompilerPlugin extends Plugin[Z3CompilerPlugin.Z3Exp, Z3CompilerPlugin.M
         Op.Minus -> "-",
         Op.Times -> "*",
         Op.Divide -> "/",
+        Op.Modulo -> "mod",
         Op.And -> "and",
         Op.Or -> "or",
         Op.Equals -> "=",

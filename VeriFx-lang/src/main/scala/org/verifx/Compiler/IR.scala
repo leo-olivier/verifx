@@ -28,6 +28,7 @@ object IR {
     case object Minus          extends BinaryOperator
     case object Times          extends BinaryOperator
     case object Divide         extends BinaryOperator
+    case object Modulo         extends BinaryOperator
     case object And            extends BinaryOperator
     case object Or             extends BinaryOperator
     case object Equals         extends BinaryOperator

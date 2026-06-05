@@ -141,6 +141,7 @@ class JavaScriptCompilerPlugin extends Plugin[JSExp, JSExp, CompilerState] {
         Op.Minus -> "-",
         Op.Times -> "*",
         Op.Divide -> "/",
+        Op.Modulo -> "%",
         Op.And -> "&&",
         Op.Or -> "||",
         Op.Equals -> "===",
