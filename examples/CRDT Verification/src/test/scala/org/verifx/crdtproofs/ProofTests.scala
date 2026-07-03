@@ -495,7 +495,7 @@ class ProofTests extends FlatSpec with Prover {
   }
 
   ////////////////////////////////////////
-  // Pure Op-based Update-Wins MultiDiGraph CRDT //
+  // Pure Op-based Update-Wins Labeled MultiDiGraph CRDT //
   ////////////////////////////////////////
 
   "PureUWMultidigraph" should "converge" in {
@@ -565,5 +565,28 @@ class ProofTests extends FlatSpec with Prover {
   it should "converge" in {
     val register = ("FairRegister", "is_a_CmRDT")
     prove(register)
+  }
+
+  ////////////////////////////////////////
+  // Pure Op-based Option CRDT //
+  ////////////////////////////////////////
+  "PureOption" should "converge" in {
+    val option = ("PureOption", "PureOption_converge")
+    prove(option)
+  }
+
+  it should "prove effect and reset commute" in {
+    val option = ("PureOption", "PureOption_effect_reset_commutes")
+    prove(option)
+  }
+
+  it should "prove resets commute" in {
+    val option = ("PureOption", "PureOption_resets_commute")
+    prove(option)
+  }
+
+  it should "be a ResettableCRDT" in {
+    val option = ("PureOption", "is_a_ResettableCRDT")
+    prove(option)
   }
 }

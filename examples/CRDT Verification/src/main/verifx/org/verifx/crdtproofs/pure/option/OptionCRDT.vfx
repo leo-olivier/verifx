@@ -1,0 +1,96 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.lemmas.ResettableCRDTProof3
+import org.verifx.crdtproofs.pure.ResettableCRDT
+
+// CRDT update operations.
+object OptionOps {
+    enum OptionOp[ChildLog, ChildOp, ChildValue] {
+        Set(u: ChildOp) |
+        Unset()
+    }
+}
+
+class OptionLog[ChildLog, ChildOp, ChildValue](
+  childCrdt: ResettableChild[ChildLog, ChildOp, ChildValue],
+  child: ChildLog
+) extends ResettableCRDT[OptionOp[ChildLog, ChildOp, ChildValue], ChildValue, OptionLog[ChildLog, ChildOp, ChildValue]] {
+  def copy(newChild: ChildLog): OptionLog[ChildLog, ChildOp, ChildValue] =
+    new OptionLog[ChildLog, ChildOp, ChildValue](this.childCrdt, newChild)
+
+  def effect(op: OptionOp[ChildLog, ChildOp, ChildValue], t: VersionVector): OptionLog[ChildLog, ChildOp, ChildValue] = op match {
+    case Set(u) =>
+      this.copy(this.childCrdt.effect(this.child, u, t))
+
+    case Unset() =>
+      this.copy(this.childCrdt.reset(this.child, t, true))
+  }
+
+  // Parent-level reset used when this Option is itself nested in another CRDT.
+  def reset(t: VersionVector, conservative: Boolean): OptionLog[ChildLog, ChildOp, ChildValue] = {
+    this.copy(this.childCrdt.reset(this.child, t, conservative))
+  }
+
+  def read(): ChildValue = this.childCrdt.applyRead(this.child)
+
+  /*
+   * Helper methods for proofs
+   */
+
+  def effectsCommute(op1: OptionOp[ChildLog, ChildOp, ChildValue], t1: VersionVector, op2: OptionOp[ChildLog, ChildOp, ChildValue], t2: VersionVector): Boolean = op1 match {
+    case Set(u1) => op2 match {
+      // Two Set operations commute if the child CRDT's effect function commutes.
+      case Set(u2) =>
+        this.childCrdt.effectsCommute(this.child, u1, t1, u2, t2)
+
+      // A Set and an Unset commute if the child CRDT's effect and reset functions commute.
+      case Unset() =>
+        this.childCrdt.effectResetCommutes(this.child, u1, t1, t2, true)
+    }
+
+    // Symetric case for when the first operation is an Unset.
+
+    case Unset() => op2 match {
+      case Set(u2) =>
+        this.childCrdt.effectResetCommutes(this.child, u2, t2, t1, true)
+
+      case Unset() =>
+        this.childCrdt.resetsCommute(this.child, t1, t2, true)
+    }
+  }
+
+  def effectResetCommutes(op: OptionOp[ChildLog, ChildOp, ChildValue], effectTime: VersionVector, resetTime: VersionVector, conservative: Boolean): Boolean = op match {
+    case Set(u) =>
+      this.childCrdt.effectResetCommutes(this.child, u, effectTime, resetTime, conservative)
+
+    case Unset() =>
+      this.childCrdt.reset(this.childCrdt.reset(this.child, effectTime, true), resetTime, conservative) ==
+      this.childCrdt.reset(this.childCrdt.reset(this.child, resetTime, conservative), effectTime, true)
+  }
+
+  def resetsCommute(t1: VersionVector, conservative1: Boolean, t2: VersionVector, conservative2: Boolean): Boolean =
+    this.childCrdt.reset(this.childCrdt.reset(this.child, t1, conservative1), t2, conservative2) ==
+    this.childCrdt.reset(this.childCrdt.reset(this.child, t2, conservative2), t1, conservative1)
+}
+
+object PureOption extends ResettableCRDTProof3[OptionOp, OptionLog] {
+  proof PureOption_converge[ChildLog, ChildOp, ChildValue] {
+    forall(
+      g: OptionLog[ChildLog, ChildOp, ChildValue],
+      op1: OptionOp[ChildLog, ChildOp, ChildValue],
+      op2: OptionOp[ChildLog, ChildOp, ChildValue],
+      t1: VersionVector,
+      t2: VersionVector
+    ) {
+      (t1.concurrent(t2) &&
+        // Version vectors are well-formed
+        t1.vector.forall((n: Int) => n >= 0) &&
+        t2.vector.forall((n: Int) => n >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        g.effectsCommute(op1, t1, op2, t2)
+      ) =>: {
+        g.effect(op1, t1).effect(op2, t2) ==
+        g.effect(op2, t2).effect(op1, t1)
+      }
+    }
+  }
+}

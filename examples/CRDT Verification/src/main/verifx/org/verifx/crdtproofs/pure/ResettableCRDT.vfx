@@ -1,0 +1,62 @@
+import org.verifx.crdtproofs.VersionVector
+
+/*
+* A trait for defining resettable CRDTs.
+*/
+trait ResettableCRDT[Op, Val, T <: ResettableCRDT[Op, Val, T]] {
+    def effect(o: Op, t: VersionVector): T
+
+    def reset(t: VersionVector, withConcurrent: Boolean): T
+
+    def read(): Val
+
+    def equals(that: T): Boolean = {
+        this == that
+    }
+
+    def effectsCommute(op1: Op, t1: VersionVector, op2: Op, t2: VersionVector): Boolean
+
+    def effectResetCommutes(op: Op, effectTime: VersionVector, resetTime: VersionVector, conservative: Boolean): Boolean
+
+    def resetsCommute(t1: VersionVector, conservative1: Boolean, t2: VersionVector, conservative2: Boolean): Boolean
+}
+
+/*
+ * Concrete dictionary for the operations required from a resettable nested child CRDT.
+ */
+class ResettableChild[Log, Op, Val](
+  effectFn: (Log, Op, VersionVector) => Log,
+  resetFn: (Log, VersionVector, Boolean) => Log,
+  isDefaultFn: Log => Boolean,
+  empty: Log,
+  readFn: Log => Val
+) {
+  def effect(log: Log, op: Op, t: VersionVector): Log =
+    this.effectFn(log, op, t)
+
+  def reset(log: Log, t: VersionVector, conservative: Boolean): Log =
+    this.resetFn(log, t, conservative)
+
+  def isDefaultLog(log: Log): Boolean =
+    this.isDefaultFn(log)
+
+  def applyRead(log: Log): Val =
+    this.readFn(log)
+
+  /* Help methods for proofs */
+
+  def effectsCommute(log: Log, op1: Op, t1: VersionVector, op2: Op, t2: VersionVector) =
+    this.effect(this.effect(log, op1, t1), op2, t2) ==
+    this.effect(this.effect(log, op2, t2), op1, t1)
+
+  def effectResetCommutes(log: Log, op: Op, effectTime: VersionVector, resetTime: VersionVector, conservative: Boolean) =
+    this.reset(this.effect(log, op, effectTime), resetTime, conservative) ==
+    this.effect(this.reset(log, resetTime, conservative), op, effectTime)
+
+  def resetsCommute(log: Log, t1: VersionVector, t2: VersionVector, conservative: Boolean) =
+    this.reset(this.reset(log, t1, conservative), t2, conservative) ==
+    this.reset(this.reset(log, t2, conservative), t1, conservative)
+
+  def emptyResetStable(t: VersionVector) =
+    this.reset(this.empty, t, true) == this.empty
+}

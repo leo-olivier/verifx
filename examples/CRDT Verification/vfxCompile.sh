@@ -1,5 +1,7 @@
 #!/bin/sh
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
 # Based on: https://unix.stackexchange.com/questions/31414/how-can-i-pass-a-command-line-argument-into-a-shell-script
 
 helpFunction()
@@ -28,4 +30,6 @@ then
 fi
 
 # Begin script in case all parameters are correct
-sbt "runMain org.verifx.CompilerRunner $lang $out"
+exec env \
+   DYLD_LIBRARY_PATH="$SCRIPT_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+   sbt "-J-Djava.library.path=$SCRIPT_DIR" "runMain org.verifx.CompilerRunner $lang $out"
