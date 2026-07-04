@@ -575,16 +575,6 @@ class ProofTests extends FlatSpec with Prover {
     prove(option)
   }
 
-  it should "prove effect and reset commute" in {
-    val option = ("PureOption", "PureOption_effect_reset_commutes")
-    prove(option)
-  }
-
-  it should "prove resets commute" in {
-    val option = ("PureOption", "PureOption_resets_commute")
-    prove(option)
-  }
-
   it should "be a ResettableCRDT" in {
     val option = ("PureOption", "is_a_ResettableCRDT")
     prove(option)

@@ -11,6 +11,9 @@ object OptionOps {
 }
 
 class OptionLog[ChildLog, ChildOp, ChildValue](
+  // VeriFx does not allow to constraint a generic type parameter to implement a trait.
+  // To work around this, we use the "typeclass dictionary passing" pattern, where we
+  // pass an instance of the trait as a constructor parameter.
   childCrdt: ResettableChild[ChildLog, ChildOp, ChildValue],
   child: ChildLog
 ) extends ResettableCRDT[OptionOp[ChildLog, ChildOp, ChildValue], ChildValue, OptionLog[ChildLog, ChildOp, ChildValue]] {
@@ -47,7 +50,7 @@ class OptionLog[ChildLog, ChildOp, ChildValue](
         this.childCrdt.effectResetCommutes(this.child, u1, t1, t2, true)
     }
 
-    // Symetric case for when the first operation is an Unset.
+    // Symmetric case when the first operation is an Unset.
 
     case Unset() => op2 match {
       case Set(u2) =>
@@ -75,7 +78,7 @@ class OptionLog[ChildLog, ChildOp, ChildValue](
 object PureOption extends ResettableCRDTProof3[OptionOp, OptionLog] {
   proof PureOption_converge[ChildLog, ChildOp, ChildValue] {
     forall(
-      g: OptionLog[ChildLog, ChildOp, ChildValue],
+      o: OptionLog[ChildLog, ChildOp, ChildValue],
       op1: OptionOp[ChildLog, ChildOp, ChildValue],
       op2: OptionOp[ChildLog, ChildOp, ChildValue],
       t1: VersionVector,
@@ -86,10 +89,10 @@ object PureOption extends ResettableCRDTProof3[OptionOp, OptionLog] {
         t1.vector.forall((n: Int) => n >= 0) &&
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
-        g.effectsCommute(op1, t1, op2, t2)
+        o.effectsCommute(op1, t1, op2, t2)
       ) =>: {
-        g.effect(op1, t1).effect(op2, t2) ==
-        g.effect(op2, t2).effect(op1, t1)
+        o.effect(op1, t1).effect(op2, t2) ==
+        o.effect(op2, t2).effect(op1, t1)
       }
     }
   }

@@ -32,10 +32,7 @@ trait ResettableCRDTProof[Op, Val, T <: ResettableCRDT[Op, Val, T]] {
         effectTime2.vector.forall((n: Int) => n >= 0) &&
         resetTime.vector.forall((n: Int) => n >= 0) &&
         effectTime1.vector.size == effectTime2.vector.size &&
-        effectTime1.vector.size == resetTime.vector.size &&
-        s.effectsCommute(op1, effectTime1, op2, effectTime2) &&
-        s.effectResetCommutes(op1, effectTime1, resetTime, conservative) &&
-        s.resetsCommute(effectTime1, conservative, effectTime2, conservative)
+        effectTime1.vector.size == resetTime.vector.size
       ) =>: {
         val effects = s.effect(op1, effectTime1).effect(op2, effectTime2).equals(s.effect(op2, effectTime2).effect(op1, effectTime1))
         val effectReset = s.effect(op1, effectTime1).reset(resetTime, conservative).equals(s.reset(resetTime, conservative).effect(op1, effectTime1))
