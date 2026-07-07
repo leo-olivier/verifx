@@ -31,20 +31,8 @@ object UWGraphOps {
  * by its nested child read function.
  */
 class LabeledMultidigraph[V, Vl, E, Al](vertices: Map[V, Vl], arcs: Map[Arc[V, E], Al]) {
-  def addVertex(v: V, label: Vl) = new LabeledMultidigraph(this.vertices.add(v, label), this.arcs)
-
-  def addArc(from: V, to: V, e: E, label: Al) = new LabeledMultidigraph(this.vertices, this.arcs.add(new Arc(from, to, e), label))
-
-  def removeVertex(v: V) = new LabeledMultidigraph(this.vertices.remove(v), this.arcs.filter((arc: Arc[V, E], label: Al) => arc.src != v && arc.dst != v))
-
-  def removeArc(from: V, to: V, e: E) = new LabeledMultidigraph(this.vertices, this.arcs.remove(new Arc(from, to, e)))
-
   def containsVertex(v: V) = this.vertices.contains(v)
-
   def containsArc(from: V, to: V, e: E) = this.arcs.contains(new Arc(from, to, e))
-
-  def isValid() =
-    this.arcs.forall((arc: Arc[V, E], label: Al) => this.containsVertex(arc.src) && this.containsVertex(arc.dst))
 }
 
 class UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel](
@@ -53,7 +41,7 @@ class UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, A
   // The graph content is stored in two maps: one for vertices and one for arcs.
   arcContent: Map[Arc[V, E], ArcLog] = new Map[Arc[V, E], ArcLog](),
   vertexContent: Map[V, VertexLog] = new Map[V, VertexLog]()
-) {
+) extends ResettableCRDT[UWGraphOp[V, E, VertexOp, ArcOp], LabeledMultidigraph[V, VertexLabel, E, ArcLabel], UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel]] {
   def copy(
     newArcContent: Map[Arc[V, E], ArcLog],
     newVertexContent: Map[V, VertexLog]
@@ -125,6 +113,21 @@ class UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, A
 
     case r: RemoveArc =>
       this.removeArc(new Arc(r.src, r.dst, r.id), t)
+  }
+
+  // This is the parent-level reset used if the whole graph is itself nested in another CRDT.
+  def reset(t: VersionVector, conservative: Boolean) = {
+    val newArcContent =
+      this.arcContent.map((arc: Arc[V, E], child: ArcLog) =>
+        this.arcChild.reset(child, t, conservative)
+      )
+
+    val newVertexContent =
+      this.vertexContent.map((v: V, child: VertexLog) =>
+        this.vertexChild.reset(child, t, conservative)
+      )
+
+    this.copy(newArcContent, newVertexContent)
   }
 
   // Check if an operation is enabled.
@@ -255,7 +258,7 @@ object UWMultidigraph {
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
         g.vertexChild.effectResetCommutes(g.vertexContent.getOrElse(updatedVertex, g.vertexChild.empty), op, t1, t2, true) &&
-        g.vertexChild.emptyResetStable(t2) &&
+        g.vertexChild.emptyResetStable(t2, true) &&
         // Operations are enabled
         g.isEnabled(new UpdateVertex[V, E, VertexOp, ArcOp](updatedVertex, op)) &&
         g.isEnabled(new RemoveVertex[V, E, VertexOp, ArcOp](removedVertex))
@@ -331,9 +334,9 @@ object UWMultidigraph {
         t1.vector.forall((n: Int) => n >= 0) &&
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
-        g.vertexChild.resetsCommute(g.vertexContent.getOrElse(v1, g.vertexChild.empty), t1, t2, true) &&
-        g.vertexChild.resetsCommute(g.vertexContent.getOrElse(v2, g.vertexChild.empty), t1, t2, true) &&
-        g.arcContent.forall((arc: Arc[V, E], child: ArcLog) => g.arcChild.resetsCommute(child, t1, t2, true)) &&
+        g.vertexChild.resetsCommute(g.vertexContent.getOrElse(v1, g.vertexChild.empty), t1, t2, true, true) &&
+        g.vertexChild.resetsCommute(g.vertexContent.getOrElse(v2, g.vertexChild.empty), t1, t2, true, true) &&
+        g.arcContent.forall((arc: Arc[V, E], child: ArcLog) => g.arcChild.resetsCommute(child, t1, t2, true, true)) &&
         // Operations are enabled
         g.isEnabled(new RemoveVertex[V, E, VertexOp, ArcOp](v1)) &&
         g.isEnabled(new RemoveVertex[V, E, VertexOp, ArcOp](v2))
@@ -360,7 +363,7 @@ object UWMultidigraph {
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
         g.arcChild.effectResetCommutes(g.arcContent.getOrElse(arc, g.arcChild.empty), op, t2, t1, true) &&
-        g.arcChild.emptyResetStable(t1) &&
+        g.arcChild.emptyResetStable(t1, true) &&
         // Operations are enabled
         g.isEnabled(new RemoveVertex[V, E, VertexOp, ArcOp](vertex)) &&
         g.isEnabled(new UpdateArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id, op))
@@ -385,7 +388,7 @@ object UWMultidigraph {
         t1.vector.forall((n: Int) => n >= 0) &&
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
-        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc, g.arcChild.empty), t1, t2, true) &&
+        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc, g.arcChild.empty), t1, t2, true, true) &&
         // Operations are enabled
         g.isEnabled(new RemoveVertex[V, E, VertexOp, ArcOp](vertex)) &&
         g.isEnabled(new RemoveArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id))
@@ -440,7 +443,7 @@ object UWMultidigraph {
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
         g.arcChild.effectResetCommutes(g.arcContent.getOrElse(updatedArc, g.arcChild.empty), op, t1, t2, true) &&
-        g.arcChild.emptyResetStable(t2) && 
+        g.arcChild.emptyResetStable(t2, true) && 
         // Operations are enabled
         g.isEnabled(new UpdateArc[V, E, VertexOp, ArcOp](updatedArc.src, updatedArc.dst, updatedArc.id, op)) &&
         g.isEnabled(new RemoveArc[V, E, VertexOp, ArcOp](removedArc.src, removedArc.dst, removedArc.id))
@@ -465,14 +468,163 @@ object UWMultidigraph {
         t1.vector.forall((n: Int) => n >= 0) &&
         t2.vector.forall((n: Int) => n >= 0) &&
         t1.vector.size == t2.vector.size &&
-        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc1, g.arcChild.empty), t1, t2, true) &&
-        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc2, g.arcChild.empty), t1, t2, true) &&
+        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc1, g.arcChild.empty), t1, t2, true, true) &&
+        g.arcChild.resetsCommute(g.arcContent.getOrElse(arc2, g.arcChild.empty), t1, t2, true, true) &&
         // Operations are enabled
         g.isEnabled(new RemoveArc[V, E, VertexOp, ArcOp](arc1.src, arc1.dst, arc1.id)) &&
         g.isEnabled(new RemoveArc[V, E, VertexOp, ArcOp](arc2.src, arc2.dst, arc2.id))
       ) =>: {
         g.removeArc(arc1, t1).removeArc(arc2, t2) ==
         g.removeArc(arc2, t2).removeArc(arc1, t1)
+      }
+    }
+  }
+
+  /*
+  * The following proof cases show that the Pure UWMultidigraph is itself resettable
+  */
+
+  // Reset operations commute
+  proof UWMultidigraph_reset_reset_commute[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel] {
+    forall(
+      g: UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel],
+      t1: VersionVector,
+      t2: VersionVector,
+      c1: Boolean,
+      c2: Boolean
+    ) {
+      (
+        t1.concurrent(t2) &&
+        // Version vectors are well-formed
+        t1.vector.forall((n: Int) => n >= 0) &&
+        t2.vector.forall((n: Int) => n >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // Given that the child CRDTs are resettable
+        g.vertexContent.forall((vertex: V, child: VertexLog) =>
+          g.vertexChild.resetsCommute(child, t1, t2, c1, c2)
+        ) &&
+        g.arcContent.forall((arc: Arc[V, E], child: ArcLog) =>
+          g.arcChild.resetsCommute(child, t1, t2, c1, c2)
+        )
+      ) =>: {
+        g.reset(t1, c1).reset(t2, c2) ==
+        g.reset(t2, c2).reset(t1, c1)
+      }
+    }
+  }
+
+  // Updating a vertex and resetting the graph commute
+  proof UWMultidigraph_update_vertex_reset[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel] {
+    forall(
+      g: UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel],
+      vertex: V,
+      op: VertexOp,
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // Given that the child CRDTs are resettable
+        g.vertexChild.effectResetCommutes(g.vertexContent.getOrElse(vertex, g.vertexChild.empty), op, effectTime, resetTime, conservative) &&
+        g.vertexChild.emptyResetStable(resetTime, conservative)
+      ) =>: {
+        g.effect(new UpdateVertex[V, E, VertexOp, ArcOp](vertex, op), effectTime).reset(resetTime, conservative) ==
+        g.reset(resetTime, conservative).effect(new UpdateVertex[V, E, VertexOp, ArcOp](vertex, op), effectTime)
+      }
+    }
+  }
+
+  // Removing a vertex and resetting the graph commute
+  proof UWMultidigraph_remove_vertex_reset[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel] {
+    forall(
+      g: UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel],
+      vertex: V,
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // Given that the child CRDTs are resettable
+        (
+          if (g.vertexContent.contains(vertex))
+            g.vertexChild.resetsCommute(g.vertexContent.get(vertex), effectTime, resetTime, true, conservative)
+          else
+            true
+        ) &&
+        g.arcContent.forall((arc: Arc[V, E], child: ArcLog) =>
+          if (arc.src == vertex || arc.dst == vertex)
+            g.arcChild.resetsCommute(child, effectTime, resetTime, true, conservative)
+          else
+            true
+        )
+      ) =>: {
+        g.effect(new RemoveVertex[V, E, VertexOp, ArcOp](vertex), effectTime).reset(resetTime, conservative) ==
+        g.reset(resetTime, conservative).effect(new RemoveVertex[V, E, VertexOp, ArcOp](vertex), effectTime)
+      }
+    }
+  }
+
+  // Updating an arc and resetting the graph commute
+  proof UWMultidigraph_update_arc_reset[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel] {
+    forall(
+      g: UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel],
+      arc: Arc[V, E],
+      op: ArcOp,
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // Given that the child CRDTs are resettable
+        g.arcChild.effectResetCommutes(g.arcContent.getOrElse(arc, g.arcChild.empty), op, effectTime, resetTime, conservative) &&
+        g.arcChild.emptyResetStable(resetTime, conservative)
+      ) =>: {
+        g.effect(new UpdateArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id, op), effectTime).reset(resetTime, conservative) ==
+        g.reset(resetTime, conservative).effect(new UpdateArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id, op), effectTime)
+      }
+    }
+  }
+
+  // Removing an arc and resetting the graph commute
+  proof UWMultidigraph_remove_arc_reset[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel] {
+    forall(
+      g: UWMultidigraphLog[V, E, VertexOp, ArcOp, VertexLog, ArcLog, VertexLabel, ArcLabel],
+      arc: Arc[V, E],
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // Given that the child CRDTs are resettable
+        (
+          if (g.arcContent.contains(arc))
+            g.arcChild.resetsCommute(g.arcContent.get(arc), effectTime, resetTime, true, conservative)
+          else
+            true
+        )
+      ) =>: {
+        g.effect(new RemoveArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id), effectTime).reset(resetTime, conservative) ==
+        g.reset(resetTime, conservative).effect(new RemoveArc[V, E, VertexOp, ArcOp](arc.src, arc.dst, arc.id), effectTime)
       }
     }
   }

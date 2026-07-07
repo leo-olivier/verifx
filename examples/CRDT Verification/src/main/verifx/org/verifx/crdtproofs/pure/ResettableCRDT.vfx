@@ -1,34 +1,45 @@
 import org.verifx.crdtproofs.VersionVector
 
 /*
+ * A Resettable CRDT is a CRDT that supports a reset operation,
+ * which resets the state of the CRDT to its default state.
+ * The reset operation can be either conservative or non-conservative.
+ * - If conservative, the reset applies only to updates that are causally preceding the reset timestamp,
+ * - otherwise it applies to all updates in the log.
+ * This mechanism is used to emulate a parent-child relationship between CRDTs, where a parent CRDT can reset the state of a child CRDT.
+ *
+ * This notion was first introduced in the paper "Nested Pure Operation-based CRDTs" (2023), by Jim Bauwens and Elisa Gonzalez Boix,
+ * https://drops.dagstuhl.de/storage/00lipics/lipics-vol263-ecoop2023/LIPIcs.ECOOP.2023.2/LIPIcs.ECOOP.2023.2.pdf
+ */
+
+/*
 * A trait for defining resettable CRDTs.
 */
 trait ResettableCRDT[Op, Val, T <: ResettableCRDT[Op, Val, T]] {
-    def effect(o: Op, t: VersionVector): T
+  // Apply an update operation to the CRDT.
+  def effect(o: Op, t: VersionVector): T
 
-    def reset(t: VersionVector, withConcurrent: Boolean): T
+    // Causally reset the CRDT.
+  def reset(t: VersionVector, conservative: Boolean): T
 
-    def read(): Val
-
-    def equals(that: T): Boolean = {
-        this == that
-    }
-
-    def effectsCommute(op1: Op, t1: VersionVector, op2: Op, t2: VersionVector): Boolean
-
-    def effectResetCommutes(op: Op, effectTime: VersionVector, resetTime: VersionVector, conservative: Boolean): Boolean
-
-    def resetsCommute(t1: VersionVector, conservative1: Boolean, t2: VersionVector, conservative2: Boolean): Boolean
+  def equals(that: T): Boolean = {
+      this == that
+  }
 }
 
 /*
  * Concrete dictionary for the operations required from a resettable nested child CRDT.
  */
 class ResettableChild[Log, Op, Val](
+  // Effect function: apply an update event (op, timestamp) to a log.
   effectFn: (Log, Op, VersionVector) => Log,
+  // Reset function: apply a reset event (timestamp, conservative) to a log.
   resetFn: (Log, VersionVector, Boolean) => Log,
+  // Returns true if the log is the default (empty) log.
   isDefaultFn: Log => Boolean,
+  // Returns an empty log
   empty: Log,
+  // Read the value from the log.
   readFn: Log => Val
 ) {
   def effect(log: Log, op: Op, t: VersionVector): Log =
@@ -43,8 +54,11 @@ class ResettableChild[Log, Op, Val](
   def applyRead(log: Log): Val =
     this.readFn(log)
 
-  /* Help methods for proofs */
+  /*
+   * Helper methods for proofs
+   */
 
+  // Convergence: the effect of two operations commute.
   def effectsCommute(log: Log, op1: Op, t1: VersionVector, op2: Op, t2: VersionVector) =
     this.effect(this.effect(log, op1, t1), op2, t2) ==
     this.effect(this.effect(log, op2, t2), op1, t1)
@@ -53,10 +67,13 @@ class ResettableChild[Log, Op, Val](
     this.reset(this.effect(log, op, effectTime), resetTime, conservative) ==
     this.effect(this.reset(log, resetTime, conservative), op, effectTime)
 
-  def resetsCommute(log: Log, t1: VersionVector, t2: VersionVector, conservative: Boolean) =
-    this.reset(this.reset(log, t1, conservative), t2, conservative) ==
-    this.reset(this.reset(log, t2, conservative), t1, conservative)
+  // Reset operations commute.
+  // c1 and c2 are the (non-)conservative flags for the two resets.
+  def resetsCommute(log: Log, t1: VersionVector, t2: VersionVector, c1: Boolean, c2: Boolean) =
+    this.reset(this.reset(log, t1, c1), t2, c2) ==
+    this.reset(this.reset(log, t2, c2), t1, c1)
 
-  def emptyResetStable(t: VersionVector) =
-    this.reset(this.empty, t, true) == this.empty
+  // Resetting an empty log is stable: it remains empty.
+  def emptyResetStable(t: VersionVector, conservative: Boolean) =
+    this.reset(this.empty, t, conservative) == this.empty
 }

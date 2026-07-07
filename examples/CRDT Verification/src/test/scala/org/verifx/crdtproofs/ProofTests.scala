@@ -524,6 +524,26 @@ class ProofTests extends FlatSpec with Prover {
     prove(graph)
   }
 
+  it should "prove reset reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_reset_reset_commute"))
+  }
+
+  it should "prove update vertex reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_update_vertex_reset"))
+  }
+
+  it should "prove remove vertex reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_remove_vertex_reset"))
+  }
+
+  it should "prove update arc reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_update_arc_reset"))
+  }
+
+  it should "prove remove arc reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_remove_arc_reset"))
+  }
+
   ////////////////////////////////////////
   // Fair Register CRDT //
   ////////////////////////////////////////
@@ -571,12 +591,16 @@ class ProofTests extends FlatSpec with Prover {
   // Pure Op-based Option CRDT //
   ////////////////////////////////////////
   "PureOption" should "converge" in {
-    val option = ("PureOption", "PureOption_converge")
+    val option = ("PureOption", "converge")
     prove(option)
   }
 
-  it should "be a ResettableCRDT" in {
-    val option = ("PureOption", "is_a_ResettableCRDT")
-    prove(option)
+  it should "be a resettable CRDT" in {
+    val proofs = List(
+      ("PureOption", "set_reset"),
+      ("PureOption", "unset_reset"),
+      ("PureOption", "reset_reset")
+    )
+    proofs.foreach(proof => prove(proof))
   }
 }
