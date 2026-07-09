@@ -1,0 +1,147 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.ResettableCRDT
+
+/*
+ * A Record-2 is a composite pure op-based CRDT with two independent fields.
+ * The record does not define conflict resolution itself: every update is routed
+ * to the child CRDT of the targeted field, and that child resolves its own
+ * concurrent operations.
+ * 
+ * In a sense, a Record CRDT is simply an object or product type, with no particular semantics.
+ */
+
+//! VeriFx does not support variadic generics, so we define a Record-2 CRDT with two fields.
+//! It is easy to see that the proofs here generalize to a Record-n.
+
+object Record2Ops {
+  enum Record2Op[Field1Op, Field2Op] {
+    UpdateField1(op: Field1Op) |
+    UpdateField2(op: Field2Op)
+  }
+}
+
+// Returned value of a Record-2 CRDT read operation.
+// The value is the product of the fields.
+class Record2Value[Field1Value, Field2Value](
+  field1: Field1Value,
+  field2: Field2Value
+)
+
+// A field of a Record
+class Field[Log, Op, Value](
+  child: ResettableChild[Log, Op, Value],
+  log: Log
+)
+
+class Record2Log[
+  Field1Log, Field1Op, Field1Value,
+  Field2Log, Field2Op, Field2Value
+](
+  field1: Field[Field1Log, Field1Op, Field1Value],
+  field2: Field[Field2Log, Field2Op, Field2Value]
+) extends ResettableCRDT[
+  Record2Op[Field1Op, Field2Op],
+  Record2Value[Field1Value, Field2Value],
+  Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value]
+] {
+  def copy(
+    newField1: Field[Field1Log, Field1Op, Field1Value],
+    newField2: Field[Field2Log, Field2Op, Field2Value]
+  ): Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value] =
+    new Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value](
+      newField1,
+      newField2
+    )
+
+  // Apply an operation to the Record-2 CRDT. The operation is routed to the child CRDT of the targeted field.
+  // Operations on different fields commute because they modify disjoint logs.
+  def effect(op: Record2Op[Field1Op, Field2Op], t: VersionVector): Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value] = op match {
+    case UpdateField1(u) =>
+      this.copy(
+        new Field[Field1Log, Field1Op, Field1Value](
+          this.field1.child,
+          this.field1.child.effect(this.field1.log, u, t)
+        ),
+        this.field2
+      )
+
+    case UpdateField2(u) =>
+      this.copy(
+        this.field1,
+        new Field[Field2Log, Field2Op, Field2Value](
+          this.field2.child,
+          this.field2.child.effect(this.field2.log, u, t)
+        )
+      )
+  }
+
+  // Reset the Record-2 CRDT to a given version vector. The reset propagates to the child CRDTs of each field.
+  def reset(t: VersionVector, conservative: Boolean): Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value] =
+    this.copy(
+      new Field[Field1Log, Field1Op, Field1Value](
+        this.field1.child,
+        this.field1.child.reset(this.field1.log, t, conservative)
+      ),
+      new Field[Field2Log, Field2Op, Field2Value](
+        this.field2.child,
+        this.field2.child.reset(this.field2.log, t, conservative)
+      )
+    )
+
+  // Recursively read the value of each field
+  def read(): Record2Value[Field1Value, Field2Value] =
+    new Record2Value[Field1Value, Field2Value](
+      this.field1.child.applyRead(this.field1.log),
+      this.field2.child.applyRead(this.field2.log)
+    )
+}
+
+object PureRecord2 {
+  /*
+   * Concurrent Record2 updates commute. Updates to the same field commute
+   * because that field's child CRDT supplies the effect commutation law.
+   * Updates to different fields commute because they modify disjoint logs.
+   */
+  proof Record2_converges[
+    Field1Log, Field1Op, Field1Value,
+    Field2Log, Field2Op, Field2Value
+  ] {
+    forall(
+      r: Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value],
+      op1: Record2Op[Field1Op, Field2Op],
+      op2: Record2Op[Field1Op, Field2Op],
+      t1: VersionVector,
+      t2: VersionVector
+    ) {
+      (t1.concurrent(t2) &&
+        // Versions are well-formed
+        t1.vector.forall((n: Int) => n >= 0) &&
+        t2.vector.forall((n: Int) => n >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // The child CRDTs are correct
+        (
+          op1 match {
+            case UpdateField1(u1) => op2 match {
+              case UpdateField1(u2) =>
+                r.field1.child.effectsCommute(r.field1.log, u1, t1, u2, t2)
+
+              case UpdateField2(_) =>
+                true
+            }
+
+            case UpdateField2(u1) => op2 match {
+              case UpdateField1(_) =>
+                true
+
+              case UpdateField2(u2) =>
+                r.field2.child.effectsCommute(r.field2.log, u1, t1, u2, t2)
+            }
+          }
+        )
+      ) =>: {
+        r.effect(op1, t1).effect(op2, t2) ==
+        r.effect(op2, t2).effect(op1, t1)
+      }
+    }
+  }
+}

@@ -495,6 +495,15 @@ class ProofTests extends FlatSpec with Prover {
   }
 
   ////////////////////////////////////////
+  // Pure Op-based Record CRDT //
+  ////////////////////////////////////////
+
+  "PureRecord2" should "converge" in {
+    val record = ("PureRecord2", "Record2_converges")
+    prove(record)
+  }
+
+  ////////////////////////////////////////
   // Pure Op-based Update-Wins Labeled MultiDiGraph CRDT //
   ////////////////////////////////////////
 
