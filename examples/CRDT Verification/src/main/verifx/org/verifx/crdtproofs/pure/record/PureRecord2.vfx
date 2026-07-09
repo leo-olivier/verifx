@@ -144,4 +144,69 @@ object PureRecord2 {
       }
     }
   }
+
+  /*
+  * The Record-2 is a correct resettable CRDT.
+  */
+
+  proof update_reset[
+    Field1Log, Field1Op, Field1Value,
+    Field2Log, Field2Op, Field2Value
+  ] {
+    forall(
+      r: Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value],
+      op: Record2Op[Field1Op, Field2Op],
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // The child is a resettable CRDT
+        (
+          op match {
+            case UpdateField1(u) =>
+              r.field1.child.effectResetCommutes(r.field1.log, u, effectTime, resetTime, conservative)
+
+            case UpdateField2(u) =>
+              r.field2.child.effectResetCommutes(r.field2.log, u, effectTime, resetTime, conservative)
+          }
+        )
+      ) =>: {
+        r.effect(op, effectTime).reset(resetTime, conservative) ==
+        r.reset(resetTime, conservative).effect(op, effectTime)
+      }
+    }
+  }
+
+  proof reset_reset[
+    Field1Log, Field1Op, Field1Value,
+    Field2Log, Field2Op, Field2Value
+  ] {
+    forall(
+      r: Record2Log[Field1Log, Field1Op, Field1Value, Field2Log, Field2Op, Field2Value],
+      resetTime1: VersionVector,
+      resetTime2: VersionVector,
+      conservative1: Boolean,
+      conservative2: Boolean
+    ) {
+      (
+        resetTime1.concurrent(resetTime2) &&
+        // Version vectors are well-formed
+        resetTime1.vector.forall((n: Int) => n >= 0) &&
+        resetTime2.vector.forall((n: Int) => n >= 0) &&
+        resetTime1.vector.size == resetTime2.vector.size &&
+        // The child is a resettable CRDT
+        r.field1.child.resetsCommute(r.field1.log, resetTime1, resetTime2, conservative1, conservative2) &&
+        r.field2.child.resetsCommute(r.field2.log, resetTime1, resetTime2, conservative1, conservative2)
+      ) =>: {
+        r.reset(resetTime1, conservative1).reset(resetTime2, conservative2) ==
+        r.reset(resetTime2, conservative2).reset(resetTime1, conservative1)
+      }
+    }
+  }
 }

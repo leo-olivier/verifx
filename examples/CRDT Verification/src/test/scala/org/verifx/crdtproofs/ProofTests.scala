@@ -503,6 +503,14 @@ class ProofTests extends FlatSpec with Prover {
     prove(record)
   }
 
+  it should "be a resettable CRDT" in {
+    val proofs = List(
+      ("PureRecord2", "update_reset"),
+      ("PureRecord2", "reset_reset"),
+    )
+    proofs.foreach(proof => prove(proof))
+  }
+
   ////////////////////////////////////////
   // Pure Op-based Update-Wins Labeled MultiDiGraph CRDT //
   ////////////////////////////////////////
