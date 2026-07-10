@@ -1,0 +1,205 @@
+import org.verifx.crdtproofs.LamportClock
+import org.verifx.crdtproofs.lemmas.CmRDT
+import org.verifx.crdtproofs.lemmas.CmRDTProof1
+
+object RegisterOps {
+    // A register has a single `write` operation.
+    enum RegisterOp[V] {
+        Write(value: V)
+    }
+}
+
+class TaggedOp[V](t: LamportClock, o: RegisterOp[V])
+
+class History[V](ops: Set[TaggedOp[V]])
+
+// Fairness ensures that every replica can eventually have one of its writes selected.
+// The history is a partially ordered set of updates.
+// `membership` is the number of replicas in the system.
+class FairRegister[V](clock: LamportClock, history: History[V], membership: Int) extends CmRDT[RegisterOp[V], TaggedOp[V], FairRegister[V]] {
+    override def reachable(): Boolean =
+        this.membership > 0 && this.validClock(this.clock)
+
+    override def compatibleS(that: FairRegister[V]): Boolean =
+        this.membership == that.membership && this.clock.replica != that.clock.replica
+
+    def write(value: V): TaggedOp[V] =
+        new TaggedOp(this.clock.increment(), new Write(value))
+
+    def prepare(op: RegisterOp[V]): TaggedOp[V] = op match {
+        case Write(value) => this.write(value)
+    }
+
+    def effect(msg: TaggedOp[V]): FairRegister[V] =
+        this.append(msg)
+
+    private def append(taggedOp: TaggedOp[V]): FairRegister[V] = {
+        val newHistory = new History(
+            this.history.ops.add(taggedOp)
+        )
+        val newClock =
+            if (this.clock.replica == taggedOp.t.replica)
+                taggedOp.t
+            else
+                this.clock
+        new FairRegister(newClock, newHistory, this.membership)
+    }
+
+    // Returns true if `t1` precedes `t2`.
+    // The winning replica is the participating replica with the smallest positive rank,
+    // i.e. the replica closest to the leader in round-robin order.
+    def compare(t1: LamportClock, t2: LamportClock): Boolean = {
+        t1.counter < t2.counter || (t1.counter == t2.counter && this.rank(t1) < this.rank(t2))
+    }
+
+    def rank(t: LamportClock): Int = {
+        val leader = t.counter % this.membership
+        val idx = t.replica
+        (idx + this.membership - leader) % this.membership
+    }
+
+    def read(): Set[TaggedOp[V]] = {
+        this.history.ops.filter((taggedOp: TaggedOp[V]) =>
+            this.history.ops.forall((to: TaggedOp[V]) =>
+                to == taggedOp || this.compare(to.t, taggedOp.t)
+            )
+        )
+    }
+
+    //* Helper functions for proofs
+
+    def validReplica(replica: Int): Boolean =
+        replica >= 0 && replica < this.membership
+
+    def validClock(t: LamportClock): Boolean =
+        t.counter >= 0 && this.validReplica(t.replica)
+
+    override def equals(that: FairRegister[V]): Boolean =
+        this.history == that.history && this.membership == that.membership
+}
+
+object FairRegister extends CmRDTProof1[RegisterOp, TaggedOp, FairRegister] {
+    //* Uniqueness
+    // For every causal history of a fair register and any two values `x` and `y`,
+    // if a query returns both `x` and `y`, then `x = y`.
+    //! VeriFx does not expose a general method for obtaining the size of a set.
+    proof FairRegister_returns_at_most_one_value[V] {
+        forall(
+            r: FairRegister[V],
+            x: TaggedOp[V],
+            y: TaggedOp[V]
+        ) {
+            (r.read().contains(x) && r.read().contains(y)) =>: (
+                x == y
+            )
+        }
+    }
+
+    //* Validity
+    // A fair register does not return values that were not written.
+    proof FairRegister_returns_only_written_values[V] {
+        forall(
+            r: FairRegister[V],
+            x: TaggedOp[V]
+        ) {
+            (r.read().contains(x)) =>: (
+                r.history.ops.contains(x)
+            )
+        }
+    }
+
+    //* Validity
+    // For every causal history of a fair register and any two updates `u` and `u'`,
+    // if `u` is returned by a query, then either `u = u'` or `u` is more recent
+    // than `u'` according to the `compare` function.
+    proof FairRegister_returns_most_recent_write[V] {
+        forall(
+            r: FairRegister[V],
+            chosen: TaggedOp[V],
+            candidate: TaggedOp[V]
+        ) {
+            (r.read().contains(chosen)
+            && r.history.ops.contains(chosen)
+            && r.history.ops.contains(candidate)) =>: (
+                candidate == chosen || r.compare(candidate.t, chosen.t)
+            )
+        }
+    }
+
+    //* Total order
+    // Proof that `compare` is a total order over valid Lamport clocks, i.e. it is:
+    // - reflexive
+    // - antisymmetric
+    // - transitive
+    // - strongly connected
+
+    // `compare` is a strongly connected order.
+    proof FairRegister_compare_totality[V] {
+        forall(
+            r: FairRegister[V],
+            t1: LamportClock,
+            t2: LamportClock
+        ) {
+            (r.membership > 0 && r.validClock(t1) && r.validClock(t2)) =>: (
+                t1 == t2 || r.compare(t1, t2) || r.compare(t2, t1)
+            )
+        }
+    }
+
+    // `compare` is an asymmetric order.
+    proof FairRegister_compare_is_asymmetric[V] {
+        forall(
+            r: FairRegister[V],
+            t1: LamportClock,
+            t2: LamportClock
+        ) {
+            (r.membership > 0 && r.validClock(t1) && r.validClock(t2) && r.compare(t1, t2)) =>: (
+                !r.compare(t2, t1)
+            )
+        }
+    }
+
+    // `compare` is a transitive order.
+    proof FairRegister_compare_is_transitive[V] {
+        forall(
+            r: FairRegister[V],
+            t1: LamportClock,
+            t2: LamportClock,
+            t3: LamportClock
+        ) {
+            (r.membership > 0
+            && r.validClock(t1)
+            && r.validClock(t2)
+            && r.validClock(t3)
+            && r.compare(t1, t2)
+            && r.compare(t2, t3)) =>: (
+                r.compare(t1, t3)
+            )
+        }
+    }
+
+    //* Fairness
+    // For every causal history of a fair register `r`, every replica `i`, and every
+    // non-negative integer `n`, there exists a Lamport clock `c >= n` such that
+    // replica `i` wins the conflict against every other replica `j` with the same counter.
+    //! NB: This is a weak notion of fairness because it only ensures that no replica
+    //! is always ranked last, regardless of the counter value.
+    //! However, the counter can still be used to starve a replica by always choosing
+    //! a counter value that ranks it last. Assuming no Byzantine behavior, the counter
+    //! value is determined only by the execution and scheduling of operations and is
+    //! not under the control of any replica.
+    proof FairRegister_each_replica_can_win_infinitely_many_rounds[V] {
+        forall(r: FairRegister[V], i: Int, n: Int) {
+            (r.membership > 0 && r.validReplica(i) && n >= 0) =>:
+                exists(c: Int) {
+                    c == i + n * r.membership &&
+                    c >= n &&
+                    forall(j: Int) {
+                        (r.validReplica(j) && j != i) =>: (
+                            r.rank(new LamportClock(i, c)) < r.rank(new LamportClock(j, c))
+                        )
+                    }
+                }
+        }
+    }
+}
