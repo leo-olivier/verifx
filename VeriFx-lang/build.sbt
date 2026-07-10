@@ -1,5 +1,5 @@
 name := "verifx"
-version := "1.0.2"
+version := "1.0.3"
 
 organization := "org.verifx"
 developers := List(Developer("Kevin", "De Porre", "kevin.de.porre@vub.be", url("https://github.com/kevin-dp")))
@@ -8,25 +8,25 @@ homepage := Some(url("https://github.com/kevin-dp/verifx"))
 licenses += ("MIT", url("http://www.opensource.org/licenses/mit-license.php"))
 publishMavenStyle := true
 
-scalaVersion := "2.13.1"
+scalaVersion := "2.13.3"
 
 // To release a new version,
 // increment the VeriFx version on line 2,
-// and execute `publishSigned` in an SBT shell.
-// Then log in to https://s01.oss.sonatype.org/
-// you should see VeriFx under "staging repositories"
-// verify that it contains the necessary files,
-// then close it, and if it successfully closed, then release it.
+// then in an SBT shell run `publishSigned` (stages locally) followed by `sonaUpload`.
+// Then log in to https://central.sonatype.com/publishing (with your Sonatype account),
+// find the deployment, verify that it contains the necessary files, and click "Publish".
+// (Alternatively, `sonaRelease` uploads and publishes in one step.)
 // Within ~30 minutes it should become available
 // and within ~2 hours it should be listed in search results in maven central.
+// Credentials: a user token generated at https://central.sonatype.com/account,
+// stored in ~/.sbt/sonatype_central_credentials (referenced from ~/.sbt/1.0/sonatype.sbt).
 
 // Remove all additional repository other than Maven Central from POM
 pomIncludeRepository := { _ => false }
 publishTo := {
-  // For accounts created after Feb 2021:
-  val nexus = "https://s01.oss.sonatype.org/"
-  if (isSnapshot.value) Some("snapshots" at nexus + "content/repositories/snapshots")
-  else Some("releases" at nexus + "service/local/staging/deploy/maven2")
+  val centralSnapshots = "https://central.sonatype.com/repository/maven-snapshots/"
+  if (isSnapshot.value) Some("central-snapshots" at centralSnapshots)
+  else localStaging.value
 }
 
 libraryDependencies ++= Seq(
@@ -49,3 +49,4 @@ assemblyMergeStrategy in assembly := {
   case PathList("reference.conf") => MergeStrategy.concat
   case _ => MergeStrategy.first
 }
+
