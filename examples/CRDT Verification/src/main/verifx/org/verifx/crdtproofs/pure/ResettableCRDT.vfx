@@ -1,0 +1,120 @@
+import org.verifx.crdtproofs.VersionVector
+
+/*
+ * A resettable CRDT supports a reset operation that restores the CRDT to its
+ * default state.
+ *
+ * A reset may follow one of two semantics:
+ * - Conservative reset: affects only updates that causally precede the reset
+ *   timestamp. Concurrent updates are preserved.
+ * - Non-conservative reset: affects all updates currently present in the log,
+ *   including concurrent ones.
+ *
+ * This mechanism can emulate parent-child relationships between CRDTs: a parent
+ * may reset the state of one or more child CRDTs to propagate its own conflict-
+ * resolution policy.
+ *
+ * Reset semantics have been used to implement nested CRDTs in:
+ *
+ * - Brown, Russell, et al. "Riak DT Map: A Composable, Convergent Replicated
+ *   Dictionary." Proceedings of the First Workshop on Principles and Practice
+ *   of Eventual Consistency, 2014.
+ *   https://doi.org/10.1145/2596631.2596633
+ *
+ * - Almeida, Paulo Sérgio, Ali Shoker, and Carlos Baquero. "Delta State
+ *   Replicated Data Types." Journal of Parallel and Distributed Computing,
+ *   vol. 111, 2018, pp. 162-173.
+ *   https://doi.org/10.1016/j.jpdc.2017.08.003
+ *
+ * The use of reset semantics for nested CRDTs is also discussed in:
+ *
+ * - Preguiça, Nuno. "Conflict-Free Replicated Data Types: An Overview."
+ *   arXiv:1806.10254, 2018.
+ *   https://doi.org/10.48550/arXiv.1806.10254
+ *
+ * The following works propose pure operation-based CRDT designs that expose
+ * reset as a client-level operation:
+ *
+ * - Baquero, Carlos, Paulo Sérgio Almeida, and Ali Shoker. "Pure
+ *   Operation-Based Replicated Data Types." arXiv:1710.04469, 2017.
+ *   https://doi.org/10.48550/arXiv.1710.04469
+ *
+ * - Younes, Georges, Paulo Sérgio Almeida, and Carlos Baquero. "Compact
+ *   Resettable Counters through Causal Stability." Proceedings of the Third
+ *   International Workshop on Principles and Practice of Consistency for
+ *   Distributed Data, 2017.
+ *   https://doi.org/10.1145/3064889.3064892
+ *
+ * Finally, the generic reset mechanism implemented here is based on:
+ *
+ * - Bauwens, Jim, and Elisa Gonzalez Boix. "Nested Pure Operation-Based
+ *   CRDTs." 37th European Conference on Object-Oriented Programming
+ *   (ECOOP 2023), 2023.
+ *   https://doi.org/10.4230/LIPIcs.ECOOP.2023.2
+ */
+
+/*
+* A trait for defining resettable CRDTs.
+*/
+trait ResettableCRDT[Op, Val, T <: ResettableCRDT[Op, Val, T]] {
+  // Apply an update operation to the CRDT.
+  def effect(o: Op, t: VersionVector): T
+
+    // Causally reset the CRDT.
+  def reset(t: VersionVector, conservative: Boolean): T
+
+  def equals(that: T): Boolean = {
+      this == that
+  }
+}
+
+/*
+ * Concrete dictionary for the operations required from a resettable nested child CRDT.
+ */
+class ResettableChild[Log, Op, Val](
+  // Effect function: apply an update event (op, timestamp) to a log.
+  effectFn: (Log, Op, VersionVector) => Log,
+  // Reset function: apply a reset event (timestamp, conservative) to a log.
+  resetFn: (Log, VersionVector, Boolean) => Log,
+  // Returns true if the log is the default (empty) log.
+  isDefaultFn: Log => Boolean,
+  // Returns an empty log
+  empty: Log,
+  // Read the value from the log.
+  readFn: Log => Val
+) {
+  def effect(log: Log, op: Op, t: VersionVector): Log =
+    this.effectFn(log, op, t)
+
+  def reset(log: Log, t: VersionVector, conservative: Boolean): Log =
+    this.resetFn(log, t, conservative)
+
+  def isDefaultLog(log: Log): Boolean =
+    this.isDefaultFn(log)
+
+  def applyRead(log: Log): Val =
+    this.readFn(log)
+
+  /*
+   * Helper methods for proofs
+   */
+
+  // Convergence: the effect of two operations commute.
+  def effectsCommute(log: Log, op1: Op, t1: VersionVector, op2: Op, t2: VersionVector) =
+    this.effect(this.effect(log, op1, t1), op2, t2) ==
+    this.effect(this.effect(log, op2, t2), op1, t1)
+
+  def effectResetCommutes(log: Log, op: Op, effectTime: VersionVector, resetTime: VersionVector, conservative: Boolean) =
+    this.reset(this.effect(log, op, effectTime), resetTime, conservative) ==
+    this.effect(this.reset(log, resetTime, conservative), op, effectTime)
+
+  // Reset operations commute.
+  // c1 and c2 are the (non-)conservative flags for the two resets.
+  def resetsCommute(log: Log, t1: VersionVector, t2: VersionVector, c1: Boolean, c2: Boolean) =
+    this.reset(this.reset(log, t1, c1), t2, c2) ==
+    this.reset(this.reset(log, t2, c2), t1, c1)
+
+  // Resetting an empty log is stable: it remains empty.
+  def emptyResetStable(t: VersionVector, conservative: Boolean) =
+    this.reset(this.empty, t, conservative) == this.empty
+}

@@ -495,7 +495,7 @@ class ProofTests extends FlatSpec with Prover {
   }
 
   ////////////////////////////////////////
-  // Pure Op-based Update-Wins MultiDiGraph CRDT //
+  // Pure Op-based Update-Wins Labeled MultiDiGraph CRDT //
   ////////////////////////////////////////
 
   "PureUWMultidigraph" should "converge" in {
@@ -522,6 +522,26 @@ class ProofTests extends FlatSpec with Prover {
   it should "prove visible arcs implies visible endpoints" in {
     val graph = ("UWMultidigraph", "UWMultidigraph_validity")
     prove(graph)
+  }
+
+  it should "prove reset reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_reset_reset_commute"))
+  }
+
+  it should "prove update vertex reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_update_vertex_reset"))
+  }
+
+  it should "prove remove vertex reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_remove_vertex_reset"))
+  }
+
+  it should "prove update arc reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_update_arc_reset"))
+  }
+
+  it should "prove remove arc reset commutes" in {
+    prove(("UWMultidigraph", "UWMultidigraph_remove_arc_reset"))
   }
 
   ////////////////////////////////////////
@@ -565,5 +585,22 @@ class ProofTests extends FlatSpec with Prover {
   it should "converge" in {
     val register = ("FairRegister", "is_a_CmRDT")
     prove(register)
+  }
+
+  ////////////////////////////////////////
+  // Pure Op-based Option CRDT //
+  ////////////////////////////////////////
+  "PureOption" should "converge" in {
+    val option = ("PureOption", "converge")
+    prove(option)
+  }
+
+  it should "be a resettable CRDT" in {
+    val proofs = List(
+      ("PureOption", "set_reset"),
+      ("PureOption", "unset_reset"),
+      ("PureOption", "reset_reset")
+    )
+    proofs.foreach(proof => prove(proof))
   }
 }

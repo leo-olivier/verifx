@@ -1,0 +1,185 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.pure.ResettableCRDT
+
+// CRDT update operations.
+object OptionOps {
+    enum OptionOp[ChildLog, ChildOp, ChildValue] {
+        Set(u: ChildOp) |
+        Unset()
+    }
+}
+
+// Values that can be read from the Option CRDT.
+object OptionValues {
+  enum OptionValue[V] {
+    Empty() |
+    Present(value: V)
+  }
+}
+
+// The Option CRDT is a composite CRDT that represents optional values of a child CRDT.
+// It exposes two update operations:
+// - Set(u: ChildOp): applies the nested update to the child CRDT.
+// - Unset(): causally resets the child CRDT, making redundant all causally preceding updates to the child.
+// The child CRDT must be a resettable CRDT. The Option CRDT is itself a resettable CRDT.
+class OptionLog[ChildLog, ChildOp, ChildValue](
+  // VeriFx does not allow to constraint a generic type parameter to implement a trait.
+  // To work around this, we use the "typeclass dictionary passing" pattern, where we
+  // pass an instance of the trait as a constructor parameter.
+  childCrdt: ResettableChild[ChildLog, ChildOp, ChildValue],
+  child: ChildLog
+) extends ResettableCRDT[OptionOp[ChildLog, ChildOp, ChildValue], OptionValue[ChildValue], OptionLog[ChildLog, ChildOp, ChildValue]] {
+  def copy(newChild: ChildLog): OptionLog[ChildLog, ChildOp, ChildValue] =
+    new OptionLog[ChildLog, ChildOp, ChildValue](this.childCrdt, newChild)
+
+  def set(op: ChildOp, t: VersionVector): OptionLog[ChildLog, ChildOp, ChildValue] =
+    this.copy(this.childCrdt.effect(this.child, op, t))
+
+  def unset(t: VersionVector): OptionLog[ChildLog, ChildOp, ChildValue] =
+    this.copy(this.childCrdt.reset(this.child, t, true))
+
+  def effect(op: OptionOp[ChildLog, ChildOp, ChildValue], t: VersionVector): OptionLog[ChildLog, ChildOp, ChildValue] = op match {
+    case Set(u) =>
+      this.set(u, t)
+
+    case Unset() =>
+      this.unset(t)
+  }
+
+  // Parent-level reset used when this Option is itself nested in another CRDT.
+  def reset(t: VersionVector, conservative: Boolean): OptionLog[ChildLog, ChildOp, ChildValue] = {
+    this.copy(this.childCrdt.reset(this.child, t, conservative))
+  }
+
+  def read(): OptionValue[ChildValue] = {
+    if (this.childCrdt.isDefaultLog(this.child)) {
+      new Empty[ChildValue]()
+    } else {
+      new Present[ChildValue](this.childCrdt.applyRead(this.child))
+    }
+  }
+}
+
+// The following proofs show that:
+// 1. Any two concurrent operations of the Option commute if the underlying child CRDT is a correct resettable CRDT.
+// 2. The Option CRDT is itself a correct resettable CRDT.
+object PureOption {
+  // Any two concurrent operations commute
+  proof converge[ChildLog, ChildOp, ChildValue] {
+    forall(
+      o: OptionLog[ChildLog, ChildOp, ChildValue],
+      op1: OptionOp[ChildLog, ChildOp, ChildValue],
+      op2: OptionOp[ChildLog, ChildOp, ChildValue],
+      t1: VersionVector,
+      t2: VersionVector
+    ) {
+      (t1.concurrent(t2) &&
+        // Version vectors are well-formed
+        t1.vector.forall((n: Int) => n >= 0) &&
+        t2.vector.forall((n: Int) => n >= 0) &&
+        t1.vector.size == t2.vector.size &&
+        // The child CRDT supplies the exact commutation law needed by
+        // each pair of Option operations.
+        (
+          op1 match {
+            case Set(u1) => op2 match {
+              case Set(u2) =>
+                // If its two Set operations, then the child CRDT's effect function must commute.
+                o.childCrdt.effectsCommute(o.child, u1, t1, u2, t2)
+
+              case Unset() =>
+                // If its a Set and an Unset, then the child CRDT's effect and reset functions must commute.
+                o.childCrdt.effectResetCommutes(o.child, u1, t1, t2, true)
+            }
+
+            // Symmetric case when the first operation is an Unset.
+            case Unset() => op2 match {
+              case Set(u2) =>
+                o.childCrdt.effectResetCommutes(o.child, u2, t2, t1, true)
+
+              case Unset() =>
+                o.childCrdt.resetsCommute(o.child, t1, t2, true, true)
+            }
+          }
+        )
+      ) =>: {
+        o.effect(op1, t1).effect(op2, t2) ==
+        o.effect(op2, t2).effect(op1, t1)
+      }
+    }
+  }
+
+  /*
+   * The Option CRDT is a correct resettable CRDT.
+   */
+
+  proof set_reset[ChildLog, ChildOp, ChildValue] {
+    forall(
+      o: OptionLog[ChildLog, ChildOp, ChildValue],
+      op: ChildOp,
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // The child is a resettable CRDT
+        o.childCrdt.effectResetCommutes(o.child, op, effectTime, resetTime, conservative)
+      ) =>: {
+        o.set(op, effectTime).reset(resetTime, conservative) ==
+        o.reset(resetTime, conservative).set(op, effectTime)
+      }
+    }
+  }
+
+  // Unsetting and resetting concurrently the Option commute.
+  proof unset_reset[ChildLog, ChildOp, ChildValue] {
+    forall(
+      o: OptionLog[ChildLog, ChildOp, ChildValue],
+      effectTime: VersionVector,
+      resetTime: VersionVector,
+      conservative: Boolean
+    ) {
+      (
+        effectTime.concurrent(resetTime) &&
+        // Version vectors are well-formed
+        effectTime.vector.forall((n: Int) => n >= 0) &&
+        resetTime.vector.forall((n: Int) => n >= 0) &&
+        effectTime.vector.size == resetTime.vector.size &&
+        // The child is a resettable CRDT
+        o.childCrdt.resetsCommute(o.child, effectTime, resetTime, true, conservative)
+      ) =>: {
+        o.unset(effectTime).reset(resetTime, conservative) ==
+        o.reset(resetTime, conservative).unset(effectTime)
+      }
+    }
+  }
+
+  // Two concurrent resets of the Option commute
+  proof reset_reset[ChildLog, ChildOp, ChildValue] {
+    forall(
+      o: OptionLog[ChildLog, ChildOp, ChildValue],
+      resetTime1: VersionVector,
+      resetTime2: VersionVector,
+      conservative1: Boolean,
+      conservative2: Boolean
+    ) {
+      (
+        resetTime1.concurrent(resetTime2) &&
+        // Version vectors are well-formed
+        resetTime1.vector.forall((n: Int) => n >= 0) &&
+        resetTime2.vector.forall((n: Int) => n >= 0) &&
+        resetTime1.vector.size == resetTime2.vector.size &&
+        // The child is a resettable CRDT
+        o.childCrdt.resetsCommute(o.child, resetTime1, resetTime2, conservative1, conservative2)
+      ) =>: {
+        o.reset(resetTime1, conservative1).reset(resetTime2, conservative2) ==
+        o.reset(resetTime2, conservative2).reset(resetTime1, conservative1)
+      }
+    }
+  }
+}
