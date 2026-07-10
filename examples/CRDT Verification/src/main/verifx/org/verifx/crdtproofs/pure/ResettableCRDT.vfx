@@ -1,15 +1,56 @@
 import org.verifx.crdtproofs.VersionVector
 
 /*
- * A Resettable CRDT is a CRDT that supports a reset operation,
- * which resets the state of the CRDT to its default state.
- * The reset operation can be either conservative or non-conservative.
- * - If conservative, the reset applies only to updates that are causally preceding the reset timestamp,
- * - otherwise it applies to all updates in the log.
- * This mechanism is used to emulate a parent-child relationship between CRDTs, where a parent CRDT can reset the state of a child CRDT.
+ * A resettable CRDT supports a reset operation that restores the CRDT to its
+ * default state.
  *
- * This notion was first introduced in the paper "Nested Pure Operation-based CRDTs" (2023), by Jim Bauwens and Elisa Gonzalez Boix,
- * https://drops.dagstuhl.de/storage/00lipics/lipics-vol263-ecoop2023/LIPIcs.ECOOP.2023.2/LIPIcs.ECOOP.2023.2.pdf
+ * A reset may follow one of two semantics:
+ * - Conservative reset: affects only updates that causally precede the reset
+ *   timestamp. Concurrent updates are preserved.
+ * - Non-conservative reset: affects all updates currently present in the log,
+ *   including concurrent ones.
+ *
+ * This mechanism can emulate parent-child relationships between CRDTs: a parent
+ * may reset the state of one or more child CRDTs to propagate its own conflict-
+ * resolution policy.
+ *
+ * Reset semantics have been used to implement nested CRDTs in:
+ *
+ * - Brown, Russell, et al. "Riak DT Map: A Composable, Convergent Replicated
+ *   Dictionary." Proceedings of the First Workshop on Principles and Practice
+ *   of Eventual Consistency, 2014.
+ *   https://doi.org/10.1145/2596631.2596633
+ *
+ * - Almeida, Paulo Sérgio, Ali Shoker, and Carlos Baquero. "Delta State
+ *   Replicated Data Types." Journal of Parallel and Distributed Computing,
+ *   vol. 111, 2018, pp. 162-173.
+ *   https://doi.org/10.1016/j.jpdc.2017.08.003
+ *
+ * The use of reset semantics for nested CRDTs is also discussed in:
+ *
+ * - Preguiça, Nuno. "Conflict-Free Replicated Data Types: An Overview."
+ *   arXiv:1806.10254, 2018.
+ *   https://doi.org/10.48550/arXiv.1806.10254
+ *
+ * The following works propose pure operation-based CRDT designs that expose
+ * reset as a client-level operation:
+ *
+ * - Baquero, Carlos, Paulo Sérgio Almeida, and Ali Shoker. "Pure
+ *   Operation-Based Replicated Data Types." arXiv:1710.04469, 2017.
+ *   https://doi.org/10.48550/arXiv.1710.04469
+ *
+ * - Younes, Georges, Paulo Sérgio Almeida, and Carlos Baquero. "Compact
+ *   Resettable Counters through Causal Stability." Proceedings of the Third
+ *   International Workshop on Principles and Practice of Consistency for
+ *   Distributed Data, 2017.
+ *   https://doi.org/10.1145/3064889.3064892
+ *
+ * Finally, the generic reset mechanism implemented here is based on:
+ *
+ * - Bauwens, Jim, and Elisa Gonzalez Boix. "Nested Pure Operation-Based
+ *   CRDTs." 37th European Conference on Object-Oriented Programming
+ *   (ECOOP 2023), 2023.
+ *   https://doi.org/10.4230/LIPIcs.ECOOP.2023.2
  */
 
 /*
