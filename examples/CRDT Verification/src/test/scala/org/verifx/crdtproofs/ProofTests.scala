@@ -3,6 +3,26 @@ package org.verifx.crdtproofs
 import org.scalatest.FlatSpec
 
 class ProofTests extends FlatSpec with Prover {
+  "VersionVector" should "preserve causal equality with origin metadata" in {
+    prove(("VersionVector", "VersionVector_origin_preserves_causal_equality"))
+  }
+
+  it should "use origin to break equal-vector ties" in {
+    prove(("VersionVector", "VersionVector_origin_breaks_equal_vector_ties"))
+  }
+
+  it should "keep synchronization commutative" in {
+    prove(("VersionVector", "VersionVector_sync_is_commutative"))
+  }
+
+  it should "keep synchronization idempotent" in {
+    prove(("VersionVector", "VersionVector_sync_is_idempotent"))
+  }
+
+  it should "keep synchronization associative" in {
+    prove(("VersionVector", "VersionVector_sync_is_associative"))
+  }
+
   "OpBasedGSet" should "be a CmRDT" in {
     val set = ("OpBasedGSet", "is_a_CmRDT")
     prove(set)
@@ -492,6 +512,54 @@ class ProofTests extends FlatSpec with Prover {
       "PureMultidigraph_concurrent_remove_hides_incident_arc"
     )
     prove(graph)
+  }
+
+  ////////////////////////////////////////
+  // Pure Op-based Typed MultiDiGraph CRDT //
+  ////////////////////////////////////////
+
+  "PureTypedGraph" should "converge" in {
+    prove(("PureTypedGraph", "is_a_CmRDT"))
+  }
+
+  it should "use LWW arbitration for multiplicity slots" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_later_arc_wins_multiplicity_slot"
+    ))
+  }
+
+  it should "cascade vertex removal to causal descendants" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_remove_vertex_removes_causal_descendant"
+    ))
+  }
+
+  it should "preserve a concurrently added descendant" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_concurrent_descendant_add_wins_parent_remove"
+    ))
+  }
+
+  it should "prove eval is deterministic" in {
+    prove(("PureTypedGraph", "PureTypedGraph_eval_is_deterministic"))
+  }
+
+  it should "always evaluate to a schema-valid graph" in {
+    prove(("PureTypedGraph", "PureTypedGraph_eval_is_valid"))
+  }
+
+  it should "prove visible arcs respect the schema" in {
+    prove(("PureTypedGraph", "PureTypedGraph_visible_arcs_respect_schema"))
+  }
+
+  it should "prove visible arcs respect multiplicity slots" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_visible_multiplicity_slots_are_unique"
+    ))
   }
 
   ////////////////////////////////////////

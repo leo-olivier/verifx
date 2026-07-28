@@ -1,7 +1,11 @@
-class VersionVector(vector: Vector[Int]) {
+// Origin identifies the replica that issued the clock.
+class VersionVector(vector: Vector[Int], origin: Int = -1) {
   def increment(replica: Int) = {
     val count = this.vector.get(replica)
-    new VersionVector(this.vector.write(replica, count + 1))
+    new VersionVector(
+      this.vector.write(replica, count + 1),
+      replica
+    )
   }
 
   def before(that: VersionVector) = {
@@ -16,6 +20,13 @@ class VersionVector(vector: Vector[Int]) {
 
   def concurrent(that: VersionVector) =
     this != that && !this.before(that) && !that.before(this)
+
+  def totalBefore(that: VersionVector): Boolean =
+    this.before(that) ||
+    (
+      this.concurrent(that) &&
+      this.origin < that.origin
+    )
 
   private def max(t: Tuple[Int, Int]) = if (t.fst >= t.snd) t.fst else t.snd
 

@@ -1,0 +1,29 @@
+import org.verifx.crdtproofs.pure.PureOpBasedCRDT
+
+/*
+ * Generic convergence proof for a pure op-based CRDT whose operation and
+ * state type constructors each take four type parameters.
+ */
+trait PureCRDTProof4[
+  Op[A, B, C, D],
+  T[A, B, C, D] <: PureOpBasedCRDT[
+    Op[A, B, C, D],
+    T[A, B, C, D]
+  ]
+] {
+  proof is_a_CmRDT[A, B, C, D] {
+    forall(
+      state: T[A, B, C, D],
+      op1: Op[A, B, C, D],
+      time1: VersionVector,
+      op2: Op[A, B, C, D],
+      time2: VersionVector
+    ) {
+      time1.concurrent(time2) =>: {
+        state.effect(op1, time1).effect(op2, time2).equals(
+          state.effect(op2, time2).effect(op1, time1)
+        )
+      }
+    }
+  }
+}

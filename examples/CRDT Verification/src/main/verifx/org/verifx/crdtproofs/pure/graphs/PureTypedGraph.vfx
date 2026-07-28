@@ -1,0 +1,519 @@
+import org.verifx.crdtproofs.VersionVector
+import org.verifx.crdtproofs.lemmas.PureCRDTProof4
+import org.verifx.crdtproofs.pure.PureOpBasedCRDT
+
+/*
+ * Pure op-based typed graph. 
+ *
+ * Model-Driven Engineering (MDE) promotes the use of models as first-class artifacts in software development.
+ * Formally, a model is a typed labelled directed multigraph where vertices represent model elements and edges
+ * represent relationships between them. A model is conforms to a metamodel, which is a type graph that specifies
+ * the types of vertices and edges, and the allowed typed arcs between a source and target type. In addition, a
+ * metamodel may specify a set of constraints, such as multiplicity (upper bound on the number of arcs from a source)
+ * and containment/aggregation (hierarchy of vertices).
+ *
+ * For more details, see:
+ *       "A graph-based semantics for UML class and object diagrams" (2008), by Kleppe, AG and Rensink, Arend
+ *
+ * In a sense, a typed graph is graph conforming to the schema expressed by its type graph.
+ *
+ * In this implementation, the schema is immutable and shared by all replicas. We consider a typed graph enriched 
+ * with the multiplicity upper bound and containment constraints. We assume the arcs to be unordered.
+ *
+ * The Pure Typed Graph extend the conflict-resolution policy of the Pure Multidigraph. Conflicts are resolved as follows:
+ * - Add arc/Add arc: if the upper bound is exceeded, the latest arc according
+ *   to the total order on version vectors wins.
+ * - Add arc/remove vertex: if the source or target vertex is removed, the arc is hidden. If a concurrent add reintroduces the removed vertex, the arc is visible again.
+ * - Add vertex/remove vertex: the vertex is kept.
+ * - Add arc/remove arc: the arc is kept.
+ */
+
+class TypeGraph[V, VertexType, EdgeType](
+    allowedFn: (VertexType, EdgeType, VertexType) => Boolean,
+    upperBoundFn: (EdgeType, VertexType) => Int,
+    childOfFn: (V, V) => Boolean
+) {
+    def allows(
+        sourceType: VertexType,
+        edgeType: EdgeType,
+        targetType: VertexType
+    ): Boolean =
+        this.allowedFn(sourceType, edgeType, targetType)
+
+    // The returned bound applies to each vertex of sourceType.
+    def upperBound(edgeType: EdgeType, sourceType: VertexType): Int =
+        this.upperBoundFn(edgeType, sourceType)
+
+    // Encode the containment hierarchy of vertices
+    def isChildOf(child: V, parent: V): Boolean =
+        this.childOfFn(child, parent)
+}
+
+// A typed vertex has an id and is labelled by its type
+class TypedVertex[V, VertexType](id: V, vertexType: VertexType)
+
+// A typed arc has an id, a source vertex, a target vertex, and
+// is labelled by its edge type.
+// It occupies a slot in the multiplicity bound.
+class TypedArc[V, VertexType, E, EdgeType](
+    source: TypedVertex[V, VertexType],
+    id: E,
+    edgeType: EdgeType,
+    target: TypedVertex[V, VertexType],
+    // Slot is in [0, schema.upperBound(edgeType, source.vertexType)).
+    slot: Int
+) {
+    def equals(that: TypedArc[V, VertexType, E, EdgeType]): Boolean =
+        this.source == that.source &&
+        this.target == that.target &&
+        this.id == that.id &&
+        this.edgeType == that.edgeType
+
+    def sameMultiplicitySlot(that: TypedArc[V, VertexType, E, EdgeType]): Boolean =
+        this.source == that.source &&
+        this.edgeType == that.edgeType &&
+        this.slot == that.slot
+}
+
+object TypedGraphOps {
+    enum TypedGraphOp[V, VertexType, E, EdgeType] {
+        AddVertex(vertex: TypedVertex[V, VertexType]) |
+        RemoveVertex(vertex: TypedVertex[V, VertexType]) |
+        AddArc(arc: TypedArc[V, VertexType, E, EdgeType]) |
+        RemoveArc(arc: TypedArc[V, VertexType, E, EdgeType])
+    }
+}
+
+/*
+ * Typed graph value returned by a read query over the PO-Log.
+ */
+class TypedGraph[V, VertexType, E, EdgeType](
+    vertices: Set[TypedVertex[V, VertexType]],
+    arcs: Set[TypedArc[V, VertexType, E, EdgeType]]
+) {
+    def containsVertex(vertex: TypedVertex[V, VertexType]): Boolean =
+        this.vertices.contains(vertex)
+
+    def containsArc(arc: TypedArc[V, VertexType, E, EdgeType]): Boolean =
+        this.arcs.contains(arc)
+
+    /*
+     * The two multiplicity predicates below encode of the upper-bound invariant.
+     * They imply that at most upperBound(edgeType, sourceType) matching
+     * arcs leave any concrete source vertex.
+    */
+
+    // Every visible arc has an in-range slot
+    def validArcs(schema: TypeGraph[V, VertexType, EdgeType]): Boolean =
+        this.arcs.forall((arc: TypedArc[V, VertexType, E, EdgeType]) =>
+            this.vertices.contains(arc.source) &&
+            this.vertices.contains(arc.target) &&
+            schema.allows(
+                arc.source.vertexType,
+                arc.edgeType,
+                arc.target.vertexType
+            ) &&
+            arc.slot >= 0 &&
+            arc.slot < schema.upperBound(arc.edgeType, arc.source.vertexType)
+        )
+
+    // Two visible arcs cannot occupy the same source/type/slot
+    def multiplicitySlotsAreUnique(): Boolean =
+        this.arcs.forall((arc1: TypedArc[V, VertexType, E, EdgeType]) =>
+            this.arcs.forall((arc2: TypedArc[V, VertexType, E, EdgeType]) =>
+                (arc1.sameMultiplicitySlot(arc2)) =>: (arc1 == arc2)
+            )
+        )
+
+    def isValid(schema: TypeGraph[V, VertexType, EdgeType]): Boolean =
+        this.validArcs(schema) &&
+        this.multiplicitySlotsAreUnique()
+}
+
+class PureTypedGraph[V, VertexType, E, EdgeType](
+  schema: TypeGraph[V, VertexType, EdgeType],
+  polog: Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]]
+) extends PureOpBasedCRDT[
+  TypedGraphOp[V, VertexType, E, EdgeType],
+  PureTypedGraph[V, VertexType, E, EdgeType]
+] {
+  def copy(
+    newPolog: Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]]
+  ): PureTypedGraph[V, VertexType, E, EdgeType] =
+    new PureTypedGraph[V, VertexType, E, EdgeType](
+      this.schema,
+      newPolog
+    )
+
+  // Removing a vertex removes that exact typed vertex and every vertex whose
+  // ID is a child of the removed vertex's ID.
+  def removedBy(
+    vertex: TypedVertex[V, VertexType],
+    removedRoot: TypedVertex[V, VertexType]
+  ): Boolean =
+    vertex == removedRoot ||
+    this.schema.isChildOf(vertex.id, removedRoot.id)
+
+  // Remove operations make their effect and then are redundant
+  def selfRedundant(
+    op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]
+  ): Boolean = op.o match {
+    case _: RemoveVertex[V, VertexType, E, EdgeType] => true
+    case _: RemoveArc[V, VertexType, E, EdgeType] => true
+    case _ => false
+  }
+
+  def redundantBy(
+    x: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]],
+    y: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]
+  ): Boolean = {
+    x.t.before(y.t) && {
+      x.o match {
+        // A previous addition of a vertex is made redundant
+        // by a later add of the same vertex or a remove of that vertex.
+        case add: AddVertex =>
+          y.o match {
+            case laterAdd: AddVertex =>
+              add.vertex == laterAdd.vertex
+            case remove: RemoveVertex =>
+              this.removedBy(add.vertex, remove.vertex)
+            case _ =>
+              false
+          }
+
+        // A previous addition of an arc is made redundant
+        // by a later addition of the same arc, the removal of that arc
+        // or the removal of one of its source/target vertex
+        case add: AddArc =>
+          y.o match {
+            case laterAdd: AddArc =>
+              add.arc.equals(laterAdd.arc)
+            case remove: RemoveArc =>
+              add.arc.equals(remove.arc)
+            case remove: RemoveVertex =>
+              this.removedBy(add.arc.source, remove.vertex) ||
+              this.removedBy(add.arc.target, remove.vertex)
+            case _ =>
+              false
+          }
+
+        case _ =>
+          false
+      }
+    }
+  }
+
+  // Candidate arcs are retained in the PO-log but are returned by queries
+  // only when their endpoints and schema constraints currently hold.
+  def candidateArcOps(
+    vertices: Set[TypedVertex[V, VertexType]]
+  ): Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]] =
+    this.polog
+      .filter((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+        op.o match {
+          case add: AddArc =>
+            val arc = add.arc
+            vertices.contains(arc.source) &&
+            vertices.contains(arc.target) &&
+            this.schema.allows(
+              arc.source.vertexType,
+              arc.edgeType,
+              arc.target.vertexType
+            ) &&
+            arc.slot >= 0 &&
+            arc.slot <
+              this.schema.upperBound(arc.edgeType, arc.source.vertexType)
+
+          case _ =>
+            false
+        }
+      )
+
+  /*
+   * LWW arbitration for one multiplicity slot. A candidate wins iff every
+   * distinct competing arc has a strictly earlier version vector according to
+   * VersionVector.totalBefore. Exact timestamp ties expose neither contender.
+   */
+  def winsMultiplicitySlot(
+    candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]],
+    candidates: Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]]
+  ): Boolean = {
+    val arc = candidate.o
+      .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
+      .arc
+
+    !candidates.exists(
+      (other: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) => {
+        val otherArc = other.o
+          .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
+          .arc
+
+        otherArc != arc &&
+        otherArc.sameMultiplicitySlot(arc) &&
+        !other.t.totalBefore(candidate.t)
+      }
+    )
+  }
+
+  def eval(): TypedGraph[V, VertexType, E, EdgeType] = {
+    val vertices = this.polog
+      .filter((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+        op.o match {
+          case _: AddVertex => true
+          case _ => false
+        }
+      )
+      .map((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+        op.o
+          .asInstanceOf[AddVertex[V, VertexType, E, EdgeType]]
+          .vertex
+      )
+    val candidates = this.candidateArcOps(vertices)
+    val visibleArcs = candidates
+      .filter(
+        (candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+          this.winsMultiplicitySlot(candidate, candidates)
+      )
+      .map(
+        (candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+          candidate.o
+            .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
+            .arc
+      )
+    new TypedGraph[V, VertexType, E, EdgeType](
+      vertices,
+      visibleArcs
+    )
+  }
+
+  //* Helper methods for mutating the CRDT state
+
+  def addVertex(
+    vertex: TypedVertex[V, VertexType],
+    t: VersionVector
+  ): PureTypedGraph[V, VertexType, E, EdgeType] =
+    this.effect(
+      new AddVertex[V, VertexType, E, EdgeType](vertex),
+      t
+    )
+
+  def removeVertex(
+    vertex: TypedVertex[V, VertexType],
+    t: VersionVector
+  ): PureTypedGraph[V, VertexType, E, EdgeType] =
+    this.effect(
+      new RemoveVertex[V, VertexType, E, EdgeType](vertex),
+      t
+    )
+
+  def addArc(
+    arc: TypedArc[V, VertexType, E, EdgeType],
+    t: VersionVector
+  ): PureTypedGraph[V, VertexType, E, EdgeType] =
+    this.effect(new AddArc[V, VertexType, E, EdgeType](arc), t)
+
+  def removeArc(
+    arc: TypedArc[V, VertexType, E, EdgeType],
+    t: VersionVector
+  ): PureTypedGraph[V, VertexType, E, EdgeType] =
+    this.effect(new RemoveArc[V, VertexType, E, EdgeType](arc), t)
+}
+
+object PureTypedGraph extends PureCRDTProof4[TypedGraphOp, PureTypedGraph] {
+  /*
+   * LWW multiplicity semantics: between two distinct arcs contending for the
+   * same slot, the arc with the greatest totally ordered version vector wins.
+   */
+  proof PureTypedGraph_later_arc_wins_multiplicity_slot[
+    V,
+    VertexType,
+    E,
+    EdgeType
+  ] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      earlierArc: TypedArc[V, VertexType, E, EdgeType],
+      laterArc: TypedArc[V, VertexType, E, EdgeType],
+      earlierTime: VersionVector,
+      laterTime: VersionVector
+    ) {
+      (
+        earlierArc != laterArc &&
+        earlierArc.sameMultiplicitySlot(laterArc) &&
+        earlierTime.totalBefore(laterTime)
+      ) =>: {
+        val earlier = new TaggedOp[
+          TypedGraphOp[V, VertexType, E, EdgeType]
+        ](
+          earlierTime,
+          new AddArc[V, VertexType, E, EdgeType](earlierArc)
+        )
+        val later = new TaggedOp[
+          TypedGraphOp[V, VertexType, E, EdgeType]
+        ](
+          laterTime,
+          new AddArc[V, VertexType, E, EdgeType](laterArc)
+        )
+        val candidates = new Set[
+          TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]
+        ]()
+          .add(earlier)
+          .add(later)
+
+        graph.winsMultiplicitySlot(later, candidates) &&
+        !graph.winsMultiplicitySlot(earlier, candidates)
+      }
+    }
+  }
+
+  /*
+   * Cascading removal: when every addition of a child vertex is in the
+   * causal past of a parent removal, the child is absent after removal.
+   * Since arcs require visible endpoints, its incident arcs are hidden too.
+   */
+  proof PureTypedGraph_remove_vertex_removes_causal_descendant[
+    V,
+    VertexType,
+    E,
+    EdgeType
+  ] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      removedRoot: TypedVertex[V, VertexType],
+      child: TypedVertex[V, VertexType],
+      removeTime: VersionVector
+    ) {
+      (
+        graph.removedBy(child, removedRoot) &&
+        graph.polog.forall(
+          (op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+            op.o match {
+              case add: AddVertex =>
+                add.vertex != child || op.t.before(removeTime)
+              case _ =>
+                true
+            }
+        )
+      ) =>: {
+        !graph
+          .removeVertex(removedRoot, removeTime)
+          .eval()
+          .containsVertex(child)
+      }
+    }
+  }
+
+  /*
+   * Add-wins boundary of cascading removal: adding a child concurrently
+   * with removal of its parent keeps that child visible.
+   */
+  proof PureTypedGraph_concurrent_descendant_add_wins_parent_remove[
+    V,
+    VertexType,
+    E,
+    EdgeType
+  ] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      removedRoot: TypedVertex[V, VertexType],
+      child: TypedVertex[V, VertexType],
+      addTime: VersionVector,
+      removeTime: VersionVector
+    ) {
+      (
+        graph.removedBy(child, removedRoot) &&
+        addTime.concurrent(removeTime)
+      ) =>: {
+        graph
+          .addVertex(child, addTime)
+          .removeVertex(removedRoot, removeTime)
+          .eval()
+          .containsVertex(child)
+      }
+    }
+  }
+
+  /*
+   * Replicas with the same schema and PO-log return the same typed graph.
+   * This connects effector commutativity to observable convergence.
+   */
+  proof PureTypedGraph_eval_is_deterministic[V, VertexType, E, EdgeType] {
+    forall(
+      graph1: PureTypedGraph[V, VertexType, E, EdgeType],
+      graph2: PureTypedGraph[V, VertexType, E, EdgeType]
+    ) {
+      (
+        graph1.schema == graph2.schema &&
+        graph1.polog == graph2.polog
+      ) =>: {
+        graph1.eval() == graph2.eval()
+      }
+    }
+  }
+
+  /*
+   * Every evaluated graph satisfies both parts of the typed schema: endpoint
+   * compatibility and the slot representation of multiplicity upper bounds.
+   */
+  proof PureTypedGraph_eval_is_valid[V, VertexType, E, EdgeType] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType]
+    ) {
+      graph.eval().isValid(graph.schema)
+    }
+  }
+
+  /*
+   * Every visible arc has visible endpoints, an allowed endpoint typing, and
+   * an in-range multiplicity slot.
+   */
+  proof PureTypedGraph_visible_arcs_respect_schema[
+    V,
+    VertexType,
+    E,
+    EdgeType
+  ] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      arc: TypedArc[V, VertexType, E, EdgeType]
+    ) {
+      graph.eval().containsArc(arc) =>: {
+        graph.eval().containsVertex(arc.source) &&
+        graph.eval().containsVertex(arc.target) &&
+        graph.schema.allows(
+          arc.source.vertexType,
+          arc.edgeType,
+          arc.target.vertexType
+        ) &&
+        arc.slot >= 0 &&
+        arc.slot <
+          graph.schema.upperBound(arc.edgeType, arc.source.vertexType)
+      }
+    }
+  }
+
+  /*
+   * At most one visible arc occupies each source/type/slot. Combined with the
+   * in-range proof, this establishes each schema multiplicity upper bound.
+   */
+  proof PureTypedGraph_visible_multiplicity_slots_are_unique[
+    V,
+    VertexType,
+    E,
+    EdgeType
+  ] {
+    forall(
+      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      arc1: TypedArc[V, VertexType, E, EdgeType],
+      arc2: TypedArc[V, VertexType, E, EdgeType]
+    ) {
+      (
+        graph.eval().containsArc(arc1) &&
+        graph.eval().containsArc(arc2) &&
+        arc1.sameMultiplicitySlot(arc2)
+      ) =>: {
+        arc1 == arc2
+      }
+    }
+  }
+}
