@@ -5,33 +5,45 @@ import org.verifx.crdtproofs.pure.PureOpBasedCRDT
 /*
  * Pure op-based typed graph. 
  *
- * Model-Driven Engineering (MDE) promotes the use of models as first-class artifacts in software development.
- * Formally, a model is a typed labelled directed multigraph where vertices represent model elements and edges
- * represent relationships between them. A model is conforms to a metamodel, which is a type graph that specifies
- * the types of vertices and edges, and the allowed typed arcs between a source and target type. In addition, a
- * metamodel may specify a set of constraints, such as multiplicity (upper bound on the number of arcs from a source)
- * and containment/aggregation (hierarchy of vertices).
+ * A type graph specifies a set of vertex and edge types and the allowed typed arcs between source and target types.
+ * In addition, it can specifcy a set of constraints, such as multiplicity
+ * (i.e., how many instances of an incident edge type are allowed per instance of a vertex type).
+ * A typed graph is a directed multigraph where edges and vertices are labelled by their types and the typed arcs
+ * conform to the schema expressed by the type graph. They are notably used in Model-Driven Engineering (MDE)
+ * to represent UML class and object diagrams.
  *
  * For more details, see:
  *       "A graph-based semantics for UML class and object diagrams" (2008), by Kleppe, AG and Rensink, Arend
  *
- * In a sense, a typed graph is graph conforming to the schema expressed by its type graph.
- *
  * In this implementation, the schema is immutable and shared by all replicas. We consider a typed graph enriched 
- * with the multiplicity upper bound and containment constraints. We assume the arcs to be unordered.
+ * with the multiplicity upper bound. We assume the arcs to be unordered.
  *
  * The Pure Typed Graph extend the conflict-resolution policy of the Pure Multidigraph. Conflicts are resolved as follows:
- * - Add arc/Add arc: if the upper bound is exceeded, the latest arc according
- *   to the total order on version vectors wins.
- * - Add arc/remove vertex: if the source or target vertex is removed, the arc is hidden. If a concurrent add reintroduces the removed vertex, the arc is visible again.
+ * - Add arc/Add arc: if the upper bound is exceeded, the arc with the oldest timestamp (according to the arbitration order) is kept ;
+ * - Add arc/remove vertex: if the source or target vertex is removed, the arc is hidden.
+ *    If a concurrent add reintroduces the removed vertex, the arc is visible again.
  * - Add vertex/remove vertex: the vertex is kept.
  * - Add arc/remove arc: the arc is kept.
  */
 
-class TypeGraph[V, VertexType, EdgeType](
+/*
+ * TYPE GRAPH
+*/
+
+// Multiplicity
+object ArcBounds {
+    enum ArcBound {
+        Bounded(max: Int) |
+        Unbounded()
+    }
+}
+
+// The type graph schema
+class TypeGraph[VertexType, EdgeType](
+    // Allowed arcs
     allowedFn: (VertexType, EdgeType, VertexType) => Boolean,
-    upperBoundFn: (EdgeType, VertexType) => Int,
-    childOfFn: (V, V) => Boolean
+    // Multiplicity of arcs leaving a source vertex of a given type
+    upperBoundFn: (EdgeType, VertexType) => ArcBound
 ) {
     def allows(
         sourceType: VertexType,
@@ -40,98 +52,303 @@ class TypeGraph[V, VertexType, EdgeType](
     ): Boolean =
         this.allowedFn(sourceType, edgeType, targetType)
 
-    // The returned bound applies to each vertex of sourceType.
-    def upperBound(edgeType: EdgeType, sourceType: VertexType): Int =
+    def upperBound(
+        edgeType: EdgeType,
+        sourceType: VertexType
+    ): ArcBound =
         this.upperBoundFn(edgeType, sourceType)
 
-    // Encode the containment hierarchy of vertices
-    def isChildOf(child: V, parent: V): Boolean =
-        this.childOfFn(child, parent)
+    // The type graph is correct if all multiplicity upper bounds are non-negative integers or unbounded.
+    def isCorrect(): Boolean =
+        forall(edgeType: EdgeType, sourceType: VertexType) {
+            this.upperBound(edgeType, sourceType) match {
+                case Bounded(max) => max >= 0
+                case Unbounded() => true
+            }
+        }
 }
 
 // A typed vertex has an id and is labelled by its type
 class TypedVertex[V, VertexType](id: V, vertexType: VertexType)
 
-// A typed arc has an id, a source vertex, a target vertex, and
-// is labelled by its edge type.
-// It occupies a slot in the multiplicity bound.
+// Used to classify arcs by source vertex and edge type.
+class TypedIncidence[V, VertexType, EdgeType](
+    vertex: TypedVertex[V, VertexType],
+    edgeType: EdgeType
+)
+
+// A typed arc has an id, a source vertex, a target vertex,
+// and is labelled by its edge type.
 class TypedArc[V, VertexType, E, EdgeType](
     source: TypedVertex[V, VertexType],
     id: E,
     edgeType: EdgeType,
-    target: TypedVertex[V, VertexType],
-    // Slot is in [0, schema.upperBound(edgeType, source.vertexType)).
-    slot: Int
+    target: TypedVertex[V, VertexType]
 ) {
     def equals(that: TypedArc[V, VertexType, E, EdgeType]): Boolean =
         this.source == that.source &&
-        this.target == that.target &&
         this.id == that.id &&
-        this.edgeType == that.edgeType
-
-    def sameMultiplicitySlot(that: TypedArc[V, VertexType, E, EdgeType]): Boolean =
-        this.source == that.source &&
         this.edgeType == that.edgeType &&
-        this.slot == that.slot
+        this.target == that.target
+
+    def incidence(): TypedIncidence[V, VertexType, EdgeType] =
+        new TypedIncidence[V, VertexType, EdgeType](
+            this.source,
+            this.edgeType
+        )
 }
 
-object TypedGraphOps {
-    enum TypedGraphOp[V, VertexType, E, EdgeType] {
-        AddVertex(vertex: TypedVertex[V, VertexType]) |
-        RemoveVertex(vertex: TypedVertex[V, VertexType]) |
-        AddArc(arc: TypedArc[V, VertexType, E, EdgeType]) |
-        RemoveArc(arc: TypedArc[V, VertexType, E, EdgeType])
+/*
+ * ARC SORTING & CONFICT RESOLUTION
+*/
+
+// Abstract deterministic arbitration order shared by all replica.
+// The typed graph is correct for any implementation of lessFn that is a
+// strict total order and extends the causal order on version vectors.
+class VersionVectorOrder(
+    lessFn: (VersionVector, VersionVector) => Boolean
+) {
+    def less(x: VersionVector, y: VersionVector): Boolean =
+        this.lessFn(x, y)
+
+    def isCorrect(): Boolean =
+      // Irreflexive
+      forall(x: VersionVector) {
+        !this.less(x, x)
+      } &&
+      // Asymmetric
+      forall(x: VersionVector, y: VersionVector) {
+        this.less(x, y) =>: !this.less(y, x)
+      } &&
+      // Transitive
+      forall(
+        x: VersionVector,
+        y: VersionVector,
+        z: VersionVector
+      ) {
+        (
+          this.less(x, y) &&
+          this.less(y, z)
+        ) =>: this.less(x, z)
+      } &&
+      // Total
+      forall(x: VersionVector, y: VersionVector) {
+        x == y || this.less(x, y) || this.less(y, x)
+      } &&
+      // Linear extension of causality
+      forall(x: VersionVector, y: VersionVector) {
+        x.before(y) =>: this.less(x, y)
+      }
+}
+
+// Timestamped value used by the grouping boundary.
+class ArcCandidate[V, VertexType, E, EdgeType](
+    arc: TypedArc[V, VertexType, E, EdgeType],
+    time: VersionVector
+) {
+    def incidence(): TypedIncidence[V, VertexType, EdgeType] =
+        this.arc.incidence()
+}
+
+// The group function enumerates and groups candidates.
+// It transform a set of candidates into a map from typed incidences to ordered lists of candidates.
+// We use this abstraction to bypass CAL theory limitations.
+// Note: it does not select multiplicity winners.
+class ArcGrouping[V, VertexType, E, EdgeType](
+    groupFn: Set[ArcCandidate[V, VertexType, E, EdgeType]] =>
+        Map[
+            TypedIncidence[V, VertexType, EdgeType],
+            LList[ArcCandidate[V, VertexType, E, EdgeType]]
+        ]
+) {
+    def group(
+        candidates: Set[ArcCandidate[V, VertexType, E, EdgeType]]
+    ): Map[
+        TypedIncidence[V, VertexType, EdgeType],
+        LList[ArcCandidate[V, VertexType, E, EdgeType]]
+    ] =
+        this.groupFn(candidates)
+
+    // Contract for the abstract finite enumeration performed by groupFn.
+    // Every candidate occurs exactly once in its incidence bucket, buckets do
+    // not invent candidates, and each bucket is ordered from oldest to newest.
+    def isCorrectFor(
+        candidates: Set[ArcCandidate[V, VertexType, E, EdgeType]],
+        clockOrder: VersionVectorOrder
+    ): Boolean = {
+        val groups = this.group(candidates)
+
+        // Every candidate is represented in its incidence bucket. In
+        // particular, a non-empty candidate set cannot map to no buckets.
+        candidates.forall(
+            (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+                groups.contains(candidate.incidence()) &&
+                groups.get(candidate.incidence()).exists(
+                    (entry: ArcCandidate[V, VertexType, E, EdgeType]) =>
+                        entry == candidate
+                )
+        ) &&
+        groups.forall(
+            (
+                incidence: TypedIncidence[V, VertexType, EdgeType],
+                entries: LList[ArcCandidate[V, VertexType, E, EdgeType]]
+            ) =>
+                entries.wellFormed() &&
+                // Buckets contain only candidates of their own incidence.
+                entries.forall(
+                    (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+                        candidates.contains(candidate) &&
+                        candidate.incidence() == incidence
+                ) &&
+                // A candidate cannot occur at two positions.
+                forall(first: Int, second: Int) {
+                    ((
+                        first >= 0 &&
+                        first < entries.size &&
+                        second >= 0 &&
+                        second < entries.size &&
+                        entries.get(first) == entries.get(second)
+                    ) =>: (first == second))
+                } &&
+                // Candidates are enumerated oldest first.
+                forall(first: Int, second: Int) {
+                    ((
+                        first >= 0 &&
+                        first < second &&
+                        second < entries.size
+                    ) =>: !clockOrder.less(
+                        entries.get(second).time,
+                        entries.get(first).time
+                    ))
+                }
+        )
+    }
+
+    // Special helper for proofs used when one bucket contains exactly
+    // two known candidates. Both permutations are accepted before the clock
+    // order determines which candidate must occur first.
+    def isCorrectPairForBucket(
+        candidates: Set[ArcCandidate[V, VertexType, E, EdgeType]],
+        incidence: TypedIncidence[V, VertexType, EdgeType],
+        candidate1: ArcCandidate[V, VertexType, E, EdgeType],
+        candidate2: ArcCandidate[V, VertexType, E, EdgeType],
+        clockOrder: VersionVectorOrder
+    ): Boolean = {
+        val groups = this.group(candidates)
+        val entries = groups.getOrElse(
+            incidence,
+            new LList[ArcCandidate[V, VertexType, E, EdgeType]]()
+        )
+
+        groups.contains(incidence) &&
+        entries.size == 2 &&
+        entries.elements.contains(0) &&
+        entries.elements.contains(1) &&
+        candidate1 != candidate2 &&
+        candidate1.incidence() == incidence &&
+        candidate2.incidence() == incidence &&
+        candidates.contains(candidate1) &&
+        candidates.contains(candidate2) &&
+        candidates.forall(
+            (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+                candidate.incidence() != incidence ||
+                candidate == candidate1 ||
+                candidate == candidate2
+        ) &&
+        (
+            (
+                entries.get(0) == candidate1 &&
+                entries.get(1) == candidate2
+            ) ||
+            (
+                entries.get(0) == candidate2 &&
+                entries.get(1) == candidate1
+            )
+        ) &&
+        !clockOrder.less(
+            entries.get(1).time,
+            entries.get(0).time
+        )
     }
 }
 
 /*
- * Typed graph value returned by a read query over the PO-Log.
- */
+ * RETURNED EVALUATED GRAPH
+*/
+
+// Labelled typed graph value returned by a read query over the PO-Log.
 class TypedGraph[V, VertexType, E, EdgeType](
     vertices: Set[TypedVertex[V, VertexType]],
-    arcs: Set[TypedArc[V, VertexType, E, EdgeType]]
+    arcs: Map[
+        TypedIncidence[V, VertexType, EdgeType],
+        LList[TypedArc[V, VertexType, E, EdgeType]]
+    ]
 ) {
     def containsVertex(vertex: TypedVertex[V, VertexType]): Boolean =
         this.vertices.contains(vertex)
 
-    def containsArc(arc: TypedArc[V, VertexType, E, EdgeType]): Boolean =
-        this.arcs.contains(arc)
-
-    /*
-     * The two multiplicity predicates below encode of the upper-bound invariant.
-     * They imply that at most upperBound(edgeType, sourceType) matching
-     * arcs leave any concrete source vertex.
-    */
-
-    // Every visible arc has an in-range slot
-    def validArcs(schema: TypeGraph[V, VertexType, EdgeType]): Boolean =
-        this.arcs.forall((arc: TypedArc[V, VertexType, E, EdgeType]) =>
-            this.vertices.contains(arc.source) &&
-            this.vertices.contains(arc.target) &&
-            schema.allows(
-                arc.source.vertexType,
-                arc.edgeType,
-                arc.target.vertexType
-            ) &&
-            arc.slot >= 0 &&
-            arc.slot < schema.upperBound(arc.edgeType, arc.source.vertexType)
+    def containsArc(arc: TypedArc[V, VertexType, E, EdgeType]): Boolean = {
+        val incidence = arc.incidence()
+        this.arcs.contains(incidence) &&
+        this.arcs.get(incidence).exists(
+            (entry: TypedArc[V, VertexType, E, EdgeType]) =>
+                entry.equals(arc)
         )
+    }
 
-    // Two visible arcs cannot occupy the same source/type/slot
-    def multiplicitySlotsAreUnique(): Boolean =
-        this.arcs.forall((arc1: TypedArc[V, VertexType, E, EdgeType]) =>
-            this.arcs.forall((arc2: TypedArc[V, VertexType, E, EdgeType]) =>
-                (arc1.sameMultiplicitySlot(arc2)) =>: (arc1 == arc2)
-            )
+    def isValid(
+        schema: TypeGraph[VertexType, EdgeType]
+    ): Boolean =
+        schema.isCorrect() &&
+        this.arcs.forall(
+            (
+                incidence: TypedIncidence[V, VertexType, EdgeType],
+                entries: LList[TypedArc[V, VertexType, E, EdgeType]]
+            ) =>
+                // The arcs respect the multiplicity upper bound
+                (schema.upperBound(
+                    incidence.edgeType,
+                    incidence.vertex.vertexType
+                ) match {
+                    case Bounded(max) => entries.size <= max
+                    case Unbounded() => true
+                }) &&
+                entries.wellFormed() &&
+                // Every visible arc has visible endpoints...
+                entries.forall(
+                    (arc: TypedArc[V, VertexType, E, EdgeType]) =>
+                        arc.incidence() == incidence &&
+                        this.vertices.contains(arc.source) &&
+                        this.vertices.contains(arc.target) &&
+                        // ...and the arc is allowed by the schema.
+                        schema.allows(
+                            arc.source.vertexType,
+                            arc.edgeType,
+                            arc.target.vertexType
+                        )
+                )
         )
-
-    def isValid(schema: TypeGraph[V, VertexType, EdgeType]): Boolean =
-        this.validArcs(schema) &&
-        this.multiplicitySlotsAreUnique()
 }
 
+/*
+ * PURE TYPED GRAPH CRDT
+*/
+
+// Operations of the Pure Typed Graph CRDT.
+object TypedGraphOps {
+    enum TypedGraphOp[V, VertexType, E, EdgeType] {
+        AddVertex(vertex: TypedVertex[V, VertexType]) |
+        RemoveVertex(id: V) |
+        AddArc(arc: TypedArc[V, VertexType, E, EdgeType]) |
+        RemoveArc(source: V, edge: E, target: V)
+    }
+}
+
+// Pure op-based typed graph CRDT.
 class PureTypedGraph[V, VertexType, E, EdgeType](
-  schema: TypeGraph[V, VertexType, EdgeType],
+  schema: TypeGraph[VertexType, EdgeType],
+  clockOrder: VersionVectorOrder,
+  arcGrouping: ArcGrouping[V, VertexType, E, EdgeType],
   polog: Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]]
 ) extends PureOpBasedCRDT[
   TypedGraphOp[V, VertexType, E, EdgeType],
@@ -142,17 +359,10 @@ class PureTypedGraph[V, VertexType, E, EdgeType](
   ): PureTypedGraph[V, VertexType, E, EdgeType] =
     new PureTypedGraph[V, VertexType, E, EdgeType](
       this.schema,
+      this.clockOrder,
+      this.arcGrouping,
       newPolog
     )
-
-  // Removing a vertex removes that exact typed vertex and every vertex whose
-  // ID is a child of the removed vertex's ID.
-  def removedBy(
-    vertex: TypedVertex[V, VertexType],
-    removedRoot: TypedVertex[V, VertexType]
-  ): Boolean =
-    vertex == removedRoot ||
-    this.schema.isChildOf(vertex.id, removedRoot.id)
 
   // Remove operations make their effect and then are redundant
   def selfRedundant(
@@ -171,12 +381,12 @@ class PureTypedGraph[V, VertexType, E, EdgeType](
       x.o match {
         // A previous addition of a vertex is made redundant
         // by a later add of the same vertex or a remove of that vertex.
-        case add: AddVertex =>
+        case oldAdd: AddVertex =>
           y.o match {
             case laterAdd: AddVertex =>
-              add.vertex == laterAdd.vertex
-            case remove: RemoveVertex =>
-              this.removedBy(add.vertex, remove.vertex)
+              oldAdd.vertex.id == laterAdd.vertex.id
+            case laterRemove: RemoveVertex =>
+              oldAdd.vertex.id == laterRemove.id
             case _ =>
               false
           }
@@ -184,15 +394,17 @@ class PureTypedGraph[V, VertexType, E, EdgeType](
         // A previous addition of an arc is made redundant
         // by a later addition of the same arc, the removal of that arc
         // or the removal of one of its source/target vertex
-        case add: AddArc =>
+        case oldAdd: AddArc =>
           y.o match {
             case laterAdd: AddArc =>
-              add.arc.equals(laterAdd.arc)
-            case remove: RemoveArc =>
-              add.arc.equals(remove.arc)
-            case remove: RemoveVertex =>
-              this.removedBy(add.arc.source, remove.vertex) ||
-              this.removedBy(add.arc.target, remove.vertex)
+              oldAdd.arc.equals(laterAdd.arc)
+            case laterRemove: RemoveArc =>
+              oldAdd.arc.source.id == laterRemove.source &&
+              oldAdd.arc.id == laterRemove.edge &&
+              oldAdd.arc.target.id == laterRemove.target
+            case laterRemoveVertex: RemoveVertex =>
+              oldAdd.arc.source.id == laterRemoveVertex.id ||
+              oldAdd.arc.target.id == laterRemoveVertex.id
             case _ =>
               false
           }
@@ -203,60 +415,8 @@ class PureTypedGraph[V, VertexType, E, EdgeType](
     }
   }
 
-  // Candidate arcs are retained in the PO-log but are returned by queries
-  // only when their endpoints and schema constraints currently hold.
-  def candidateArcOps(
-    vertices: Set[TypedVertex[V, VertexType]]
-  ): Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]] =
+  def visibleVertices(): Set[TypedVertex[V, VertexType]] =
     this.polog
-      .filter((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
-        op.o match {
-          case add: AddArc =>
-            val arc = add.arc
-            vertices.contains(arc.source) &&
-            vertices.contains(arc.target) &&
-            this.schema.allows(
-              arc.source.vertexType,
-              arc.edgeType,
-              arc.target.vertexType
-            ) &&
-            arc.slot >= 0 &&
-            arc.slot <
-              this.schema.upperBound(arc.edgeType, arc.source.vertexType)
-
-          case _ =>
-            false
-        }
-      )
-
-  /*
-   * LWW arbitration for one multiplicity slot. A candidate wins iff every
-   * distinct competing arc has a strictly earlier version vector according to
-   * VersionVector.totalBefore. Exact timestamp ties expose neither contender.
-   */
-  def winsMultiplicitySlot(
-    candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]],
-    candidates: Set[TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]]
-  ): Boolean = {
-    val arc = candidate.o
-      .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
-      .arc
-
-    !candidates.exists(
-      (other: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) => {
-        val otherArc = other.o
-          .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
-          .arc
-
-        otherArc != arc &&
-        otherArc.sameMultiplicitySlot(arc) &&
-        !other.t.totalBefore(candidate.t)
-      }
-    )
-  }
-
-  def eval(): TypedGraph[V, VertexType, E, EdgeType] = {
-    val vertices = this.polog
       .filter((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
         op.o match {
           case _: AddVertex => true
@@ -268,252 +428,366 @@ class PureTypedGraph[V, VertexType, E, EdgeType](
           .asInstanceOf[AddVertex[V, VertexType, E, EdgeType]]
           .vertex
       )
-    val candidates = this.candidateArcOps(vertices)
-    val visibleArcs = candidates
-      .filter(
-        (candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
-          this.winsMultiplicitySlot(candidate, candidates)
+
+  // The candidates are the visible arcs whose endpoints are visible vertices and whose types are allowed by the schema.
+  def candidates(vertices: Set[TypedVertex[V, VertexType]]): Set[ArcCandidate[V, VertexType, E, EdgeType]] = {
+    val arcCandidates = this.polog
+      .filter((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+        op.o match {
+          case add: AddArc =>
+            // Only consider arcs whose endpoints are visible...
+            vertices.contains(add.arc.source) &&
+            vertices.contains(add.arc.target) &&
+            // ...and allowed by the schema
+            this.schema.allows(
+              add.arc.source.vertexType,
+              add.arc.edgeType,
+              add.arc.target.vertexType
+            )
+          case _ => false
+        }
       )
-      .map(
-        (candidate: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
-          candidate.o
+      .map((op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+        new ArcCandidate[V, VertexType, E, EdgeType](
+          op.o
             .asInstanceOf[AddArc[V, VertexType, E, EdgeType]]
-            .arc
+            .arc,
+          op.t
+        )
       )
-    new TypedGraph[V, VertexType, E, EdgeType](
-      vertices,
-      visibleArcs
+
+    // Keep the oldest representative of concurrent additions of one logical arc.
+    arcCandidates.filter(
+      (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+        !arcCandidates.exists(
+          (other: ArcCandidate[V, VertexType, E, EdgeType]) =>
+            other != candidate &&
+            candidate.arc.equals(other.arc) &&
+            this.clockOrder.less(other.time, candidate.time)
+        )
     )
   }
 
-  //* Helper methods for mutating the CRDT state
+  // The immutable services used by eval satisfy their semantic contracts for
+  // this state's actual candidate set.
+  def isWellFormed(): Boolean = {
+    val candidates = this.candidates(this.visibleVertices())
 
-  def addVertex(
-    vertex: TypedVertex[V, VertexType],
-    t: VersionVector
-  ): PureTypedGraph[V, VertexType, E, EdgeType] =
-    this.effect(
-      new AddVertex[V, VertexType, E, EdgeType](vertex),
-      t
+    this.schema.isCorrect() &&
+    this.clockOrder.isCorrect() &&
+    this.arcGrouping.isCorrectFor(candidates, this.clockOrder)
+  }
+
+  // Resolve one finite incidence bucket
+  def resolveBucket(
+    incidence: TypedIncidence[V, VertexType, EdgeType],
+    entries: LList[ArcCandidate[V, VertexType, E, EdgeType]],
+    candidates: Set[ArcCandidate[V, VertexType, E, EdgeType]]
+  ): LList[TypedArc[V, VertexType, E, EdgeType]] = {
+    val count = this.schema.upperBound(
+      incidence.edgeType,
+      incidence.vertex.vertexType
+    ) match {
+      case Bounded(max) => max
+      case Unbounded() => entries.size
+    }
+    val resultSize =
+      if (entries.size < count)
+        entries.size
+      else
+        count
+
+    val resultElements = entries.elements.filter(
+      (
+        index: Int,
+        candidate: ArcCandidate[V, VertexType, E, EdgeType]
+      ) =>
+        index >= 0 &&
+        index < resultSize &&
+        candidates.contains(candidate) &&
+        candidate.incidence() == incidence
+    )
+    new LList[ArcCandidate[V, VertexType, E, EdgeType]](
+      resultSize,
+      resultElements
+    ).map(
+      (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+        candidate.arc
+    )
+  }
+
+  // The evaluated graph consists of all visible vertices and arcs
+  def eval(): TypedGraph[V, VertexType, E, EdgeType] = {
+    val vertices = this.visibleVertices()
+    val candidates = this.candidates(vertices)
+
+    // Group candidates by source vertex and edge type,
+    // then apply the multiplicity upper bound to each group.
+    val arcs = this.arcGrouping.group(candidates).map(
+      (
+        incidence: TypedIncidence[V, VertexType, EdgeType],
+        entries: LList[ArcCandidate[V, VertexType, E, EdgeType]]
+      ) => this.resolveBucket(incidence, entries, candidates)
     )
 
-  def removeVertex(
-    vertex: TypedVertex[V, VertexType],
-    t: VersionVector
-  ): PureTypedGraph[V, VertexType, E, EdgeType] =
-    this.effect(
-      new RemoveVertex[V, VertexType, E, EdgeType](vertex),
-      t
+    new TypedGraph[V, VertexType, E, EdgeType](
+      vertices,
+      arcs
     )
+  }
+
+  /* Helper methods for proofs */
 
   def addArc(
     arc: TypedArc[V, VertexType, E, EdgeType],
-    t: VersionVector
+    time: VersionVector
   ): PureTypedGraph[V, VertexType, E, EdgeType] =
-    this.effect(new AddArc[V, VertexType, E, EdgeType](arc), t)
-
-  def removeArc(
-    arc: TypedArc[V, VertexType, E, EdgeType],
-    t: VersionVector
-  ): PureTypedGraph[V, VertexType, E, EdgeType] =
-    this.effect(new RemoveArc[V, VertexType, E, EdgeType](arc), t)
+    this.effect(new AddArc(arc), time)
 }
 
 object PureTypedGraph extends PureCRDTProof4[TypedGraphOp, PureTypedGraph] {
-  /*
-   * LWW multiplicity semantics: between two distinct arcs contending for the
-   * same slot, the arc with the greatest totally ordered version vector wins.
+  /* Dangling arcs:
+   * An arc can only be visible in the evaluated graph when both of its endpoints are visible as vertices.
+   * I.e., dangling arcs are hidden, and the invariant A ⊆ V × V × E holds in the evaluated graph.
    */
-  proof PureTypedGraph_later_arc_wins_multiplicity_slot[
-    V,
-    VertexType,
-    E,
-    EdgeType
-  ] {
+  proof PureTypedGraph_eval_arc_implies_visible_endpoints[V, VertexType, E, EdgeType] {
     forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType],
-      earlierArc: TypedArc[V, VertexType, E, EdgeType],
-      laterArc: TypedArc[V, VertexType, E, EdgeType],
-      earlierTime: VersionVector,
-      laterTime: VersionVector
-    ) {
-      (
-        earlierArc != laterArc &&
-        earlierArc.sameMultiplicitySlot(laterArc) &&
-        earlierTime.totalBefore(laterTime)
-      ) =>: {
-        val earlier = new TaggedOp[
-          TypedGraphOp[V, VertexType, E, EdgeType]
-        ](
-          earlierTime,
-          new AddArc[V, VertexType, E, EdgeType](earlierArc)
-        )
-        val later = new TaggedOp[
-          TypedGraphOp[V, VertexType, E, EdgeType]
-        ](
-          laterTime,
-          new AddArc[V, VertexType, E, EdgeType](laterArc)
-        )
-        val candidates = new Set[
-          TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]
-        ]()
-          .add(earlier)
-          .add(later)
-
-        graph.winsMultiplicitySlot(later, candidates) &&
-        !graph.winsMultiplicitySlot(earlier, candidates)
-      }
-    }
-  }
-
-  /*
-   * Cascading removal: when every addition of a child vertex is in the
-   * causal past of a parent removal, the child is absent after removal.
-   * Since arcs require visible endpoints, its incident arcs are hidden too.
-   */
-  proof PureTypedGraph_remove_vertex_removes_causal_descendant[
-    V,
-    VertexType,
-    E,
-    EdgeType
-  ] {
-    forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType],
-      removedRoot: TypedVertex[V, VertexType],
-      child: TypedVertex[V, VertexType],
-      removeTime: VersionVector
-    ) {
-      (
-        graph.removedBy(child, removedRoot) &&
-        graph.polog.forall(
-          (op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
-            op.o match {
-              case add: AddVertex =>
-                add.vertex != child || op.t.before(removeTime)
-              case _ =>
-                true
-            }
-        )
-      ) =>: {
-        !graph
-          .removeVertex(removedRoot, removeTime)
-          .eval()
-          .containsVertex(child)
-      }
-    }
-  }
-
-  /*
-   * Add-wins boundary of cascading removal: adding a child concurrently
-   * with removal of its parent keeps that child visible.
-   */
-  proof PureTypedGraph_concurrent_descendant_add_wins_parent_remove[
-    V,
-    VertexType,
-    E,
-    EdgeType
-  ] {
-    forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType],
-      removedRoot: TypedVertex[V, VertexType],
-      child: TypedVertex[V, VertexType],
-      addTime: VersionVector,
-      removeTime: VersionVector
-    ) {
-      (
-        graph.removedBy(child, removedRoot) &&
-        addTime.concurrent(removeTime)
-      ) =>: {
-        graph
-          .addVertex(child, addTime)
-          .removeVertex(removedRoot, removeTime)
-          .eval()
-          .containsVertex(child)
-      }
-    }
-  }
-
-  /*
-   * Replicas with the same schema and PO-log return the same typed graph.
-   * This connects effector commutativity to observable convergence.
-   */
-  proof PureTypedGraph_eval_is_deterministic[V, VertexType, E, EdgeType] {
-    forall(
-      graph1: PureTypedGraph[V, VertexType, E, EdgeType],
-      graph2: PureTypedGraph[V, VertexType, E, EdgeType]
-    ) {
-      (
-        graph1.schema == graph2.schema &&
-        graph1.polog == graph2.polog
-      ) =>: {
-        graph1.eval() == graph2.eval()
-      }
-    }
-  }
-
-  /*
-   * Every evaluated graph satisfies both parts of the typed schema: endpoint
-   * compatibility and the slot representation of multiplicity upper bounds.
-   */
-  proof PureTypedGraph_eval_is_valid[V, VertexType, E, EdgeType] {
-    forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType]
-    ) {
-      graph.eval().isValid(graph.schema)
-    }
-  }
-
-  /*
-   * Every visible arc has visible endpoints, an allowed endpoint typing, and
-   * an in-range multiplicity slot.
-   */
-  proof PureTypedGraph_visible_arcs_respect_schema[
-    V,
-    VertexType,
-    E,
-    EdgeType
-  ] {
-    forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType],
+      g: PureTypedGraph[V, VertexType, E, EdgeType],
       arc: TypedArc[V, VertexType, E, EdgeType]
     ) {
-      graph.eval().containsArc(arc) =>: {
-        graph.eval().containsVertex(arc.source) &&
-        graph.eval().containsVertex(arc.target) &&
-        graph.schema.allows(
-          arc.source.vertexType,
-          arc.edgeType,
-          arc.target.vertexType
-        ) &&
-        arc.slot >= 0 &&
-        arc.slot <
-          graph.schema.upperBound(arc.edgeType, arc.source.vertexType)
-      }
+      g.eval().containsArc(arc) =>: (
+        g.eval().containsVertex(arc.source) &&
+        g.eval().containsVertex(arc.target)
+      )
     }
   }
 
-  /*
-   * At most one visible arc occupies each source/type/slot. Combined with the
-   * in-range proof, this establishes each schema multiplicity upper bound.
+  /* Schema conformance:
+   * Every visible arc in the evaluated graph is allowed by the schema.
    */
-  proof PureTypedGraph_visible_multiplicity_slots_are_unique[
-    V,
-    VertexType,
-    E,
-    EdgeType
+  proof PureTypedGraph_eval_arc_respects_schema[V, VertexType, E, EdgeType] {
+    forall(
+      g: PureTypedGraph[V, VertexType, E, EdgeType],
+    ) {
+      g.eval().arcs.forall(
+        (
+          incidence: TypedIncidence[V, VertexType, EdgeType],
+          entries: LList[TypedArc[V, VertexType, E, EdgeType]]
+        ) => entries.forall(
+          (arc: TypedArc[V, VertexType, E, EdgeType]) =>
+            g.schema.allows(
+              arc.source.vertexType,
+              arc.edgeType,
+              arc.target.vertexType
+            )
+        )
+      )
+    }
+  }
+
+  /* Multiplicity:
+   * The number of visible arcs of a given edge type leaving a source vertex of a given type
+    * does not exceed the multiplicity upper bound specified by the schema.
+   */
+  proof PureTypedGraph_eval_respects_upper_bounds[V, VertexType, E, EdgeType] {
+    forall(g: PureTypedGraph[V, VertexType, E, EdgeType]) {
+      g.isWellFormed() =>: g.eval().arcs.forall(
+        (
+          incidence: TypedIncidence[V, VertexType, EdgeType],
+          entries: LList[TypedArc[V, VertexType, E, EdgeType]]
+        ) =>
+          entries.wellFormed() &&
+          (g.schema.upperBound(
+            incidence.edgeType,
+            incidence.vertex.vertexType
+          ) match {
+            case Bounded(max) => entries.size <= max
+            case Unbounded() => true
+          })
+      )
+    }
+  }
+
+  /* Complete read validity:
+   * For a well-formed CRDT configuration, eval returns a well-formed typed
+   * graph whose arcs have visible endpoints, satisfy the schema, are grouped
+   * by the right incidence, and respect multiplicity upper bounds.
+   */
+  proof PureTypedGraph_eval_is_valid[V, VertexType, E, EdgeType] {
+    forall(g: PureTypedGraph[V, VertexType, E, EdgeType]) {
+      g.isWellFormed() =>: g.eval().isValid(g.schema)
+    }
+  }
+
+  /* Unbounded-bucket liveness:
+   * Correct grouping cannot silently discard an eligible candidate. When its
+   * incidence is unbounded, eval returns the candidate's arc.
+   */
+  proof PureTypedGraph_unbounded_candidate_is_visible[
+    V, VertexType, E, EdgeType
   ] {
     forall(
-      graph: PureTypedGraph[V, VertexType, E, EdgeType],
-      arc1: TypedArc[V, VertexType, E, EdgeType],
-      arc2: TypedArc[V, VertexType, E, EdgeType]
+      g: PureTypedGraph[V, VertexType, E, EdgeType],
+      candidate: ArcCandidate[V, VertexType, E, EdgeType]
     ) {
+      val candidates = g.candidates(g.visibleVertices())
+      val incidence = candidate.incidence()
+
       (
-        graph.eval().containsArc(arc1) &&
-        graph.eval().containsArc(arc2) &&
-        arc1.sameMultiplicitySlot(arc2)
-      ) =>: {
-        arc1 == arc2
-      }
+        g.isWellFormed() &&
+        candidates.contains(candidate) &&
+        (g.schema.upperBound(
+          incidence.edgeType,
+          incidence.vertex.vertexType
+        ) match {
+          case Unbounded() => true
+          case Bounded(_) => false
+        })
+      ) =>: g.eval().containsArc(candidate.arc)
+    }
+  }
+
+  /* Upper bound overflow:
+   * The following two lemmas prove a special case of conflict resolution where the concurrent
+   * addition of two arcs is incompatible with the multiplicity specified in the schema.
+   * Due to Z3 limitations, we prove the correctness of this conflict resolution for the case where
+   * the upper multiplicity bound is 1.
+   *
+   * - The first lemma proves that two concurrent arc additions produce exactly
+   *   the expected candidates for their incidence.
+   * - The second uses the explicit grouping contract to prove that a bound-one
+   *   read keeps the oldest candidate.
+   */
+
+  /* Candidate extraction:
+   * Adding two valid arcs to an empty incidence 
+   * produces exactly the two corresponding candidates in that
+   * incidence. This isolates the effect phase from multiplicity resolution.
+   */
+  proof PureTypedGraph_two_fresh_arcs_form_candidate_set[
+    V, VertexType, E, EdgeType
+  ] {
+    forall(
+      g: PureTypedGraph[V, VertexType, E, EdgeType],
+      arc1: TypedArc[V, VertexType, E, EdgeType],
+      t1: VersionVector,
+      arc2: TypedArc[V, VertexType, E, EdgeType],
+      t2: VersionVector
+    ) {
+      val incidence = arc1.incidence()
+      val candidate1 =
+        new ArcCandidate[V, VertexType, E, EdgeType](arc1, t1)
+      val candidate2 =
+        new ArcCandidate[V, VertexType, E, EdgeType](arc2, t2)
+      val updated = g.addArc(arc1, t1).addArc(arc2, t2)
+      val candidates = updated.candidates(g.visibleVertices())
+
+      (
+        // Concurrent effects cannot make either new addition redundant.
+        t1.concurrent(t2) &&
+        t1.isValid() &&
+        t2.isValid() &&
+        t1.vector.size == t2.vector.size &&
+        // The additions are distinct members of the same incidence bucket.
+        !arc1.equals(arc2) &&
+        incidence == arc2.incidence() &&
+        // Both additions are eligible candidates.
+        g.visibleVertices().contains(arc1.source) &&
+        g.visibleVertices().contains(arc1.target) &&
+        g.visibleVertices().contains(arc2.target) &&
+        g.schema.allows(
+          arc1.source.vertexType,
+          arc1.edgeType,
+          arc1.target.vertexType
+        ) &&
+        g.schema.allows(
+          arc2.source.vertexType,
+          arc2.edgeType,
+          arc2.target.vertexType
+        ) &&
+        // No earlier PO-Log operation can contribute another candidate
+        // to this incidence or replace either fresh addition.
+        g.polog.forall(
+          (op: TaggedOp[TypedGraphOp[V, VertexType, E, EdgeType]]) =>
+            op.o match {
+              case add: AddArc =>
+                add.arc.incidence() != incidence
+              case _ => true
+            }
+        )
+      ) =>: (
+        candidates.contains(candidate1) &&
+        candidates.contains(candidate2) &&
+        candidates.forall(
+          (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+            candidate.incidence() != incidence ||
+            candidate == candidate1 ||
+            candidate == candidate2
+        )
+      )
+    }
+  }
+
+  /* Bound-one multiplicity resolution:
+   * When a correctly grouped incidence contains exactly two candidates and
+   * its bound is one, the resolver used by eval retains the first (oldest)
+   * candidate and hides the second. Candidate extraction is outside this proof.
+   */
+  proof PureTypedGraph_bound_one_two_candidate_bucket_keeps_oldest[
+    V, VertexType, E, EdgeType
+  ] {
+    forall(
+      g: PureTypedGraph[V, VertexType, E, EdgeType],
+      arc1: TypedArc[V, VertexType, E, EdgeType],
+      t1: VersionVector,
+      arc2: TypedArc[V, VertexType, E, EdgeType],
+      t2: VersionVector
+    ) {
+      val incidence = arc1.incidence()
+      val candidate1 =
+        new ArcCandidate[V, VertexType, E, EdgeType](arc1, t1)
+      val candidate2 =
+        new ArcCandidate[V, VertexType, E, EdgeType](arc2, t2)
+      val candidates = g.candidates(g.visibleVertices())
+      val entries = g.arcGrouping.group(candidates).getOrElse(
+        incidence,
+        new LList[ArcCandidate[V, VertexType, E, EdgeType]]()
+      )
+      val resolved = g.resolveBucket(incidence, entries, candidates)
+
+      (
+        // Validate the schema, arbitration order, and complete grouping of the
+        // candidate set used by this read. This excludes an empty groupFn.
+        g.isWellFormed() &&
+        // The total timestamp order places candidate1 before candidate2.
+        g.clockOrder.less(t1, t2) &&
+        !arc1.equals(arc2) &&
+        candidate1 != candidate2 &&
+        incidence == arc2.incidence() &&
+        candidates.contains(candidate1) &&
+        candidates.contains(candidate2) &&
+        candidates.forall(
+          (candidate: ArcCandidate[V, VertexType, E, EdgeType]) =>
+            candidate.incidence() != incidence ||
+            candidate == candidate1 ||
+            candidate == candidate2
+        ) &&
+        // Exact duplicate-free grouping entails this size. Keeping it explicit
+        // avoids an expensive cardinality argument over LList's backing map.
+        entries.size == 2 &&
+        // This bucket overflows its bound by exactly one candidate.
+        (g.schema.upperBound(
+          arc1.edgeType,
+          arc1.source.vertexType
+        ) match {
+          case Bounded(max) => max == 1
+          case Unbounded() => false
+        })
+      ) =>: (
+        resolved.size == 1 &&
+        resolved.get(0).equals(arc1) &&
+        !resolved.get(0).equals(arc2)
+      )
     }
   }
 }

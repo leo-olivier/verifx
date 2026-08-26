@@ -2,6 +2,23 @@ import org.verifx.crdtproofs.LamportClock
 import org.verifx.crdtproofs.lemmas.CmRDT
 import org.verifx.crdtproofs.lemmas.CmRDTProof1
 
+/*
+ * Implementation of a pure op-based Add-Wins multidigraph CRDT,
+ * following the specification from:
+ *      Olivier, Didonet Del Fabro, Gérard.
+ *      "Hybrid Collaborative Modeling: Problem Analysis, Requirements, and Architectural Principles.
+ *      http://dx.doi.org/10.5381/jot.2026.25.3.a27 (2026)
+ *
+ *  Inspired by the footnote 3 of the seminal paper of Lamport regarding the use of Lamport clocks to
+ *  order events in a distributed system:
+ *      Lamport.
+ *      "Time, clocks, and the ordering of events in a distributed system."
+ *      https://dl.acm.org/doi/10.1145/359545.359563 (1978)
+ *
+ * Supports one operation:
+ * - write(value): writes a value to the register
+ */
+
 object RegisterOps {
     // A register has a single `write` operation.
     enum RegisterOp[V] {
@@ -132,6 +149,18 @@ object FairRegister extends CmRDTProof1[RegisterOp, TaggedOp, FairRegister] {
     // - antisymmetric
     // - transitive
     // - strongly connected
+
+    proof FairRegister_compare_reflexive[V] {
+        forall(
+            r: FairRegister[V],
+            t1: LamportClock,
+            t2: LamportClock
+        ) {
+            (r.membership > 0 && r.validClock(t1) && r.validClock(t2) && t1 == t2) =>: (
+                r.compare(t1, t2)
+            )
+        }
+    }
 
     // `compare` is a strongly connected order.
     proof FairRegister_compare_totality[V] {

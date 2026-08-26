@@ -2,8 +2,10 @@ import org.verifx.crdtproofs.lemmas.CvRDT
 import org.verifx.crdtproofs.lemmas.CvRDTProof2
 import org.verifx.crdtproofs.VersionVector
 
-class MVRegister[V, Time](before: (Time, Time) => Boolean,
-                           values: Set[Tuple[V, Time]] = new Set[Tuple[V, Time]]()) extends CvRDT[MVRegister[V, Time]] {
+class MVRegister[V, Time](
+  before: (Time, Time) => Boolean,
+  values: Set[Tuple[V, Time]] = new Set[Tuple[V, Time]]()
+) extends CvRDT[MVRegister[V, Time]] {
 
   // Define some helper functions regarding time based on `before`
   private def concurrent(t1: Time, t2: Time) = !this.before(t1, t2) && !this.before(t2, t1) && t1 != t2

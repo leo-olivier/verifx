@@ -162,7 +162,6 @@ object PureMultidigraph extends PureCRDTProof2[GraphOps, PureMultidigraph] {
 
   /* Convergence:
    * If two replicas have the same PO-Log, then evaluating that log must produce the same graph.
-   * I.e., the query results does not depend on the delivery schedule.
    */
   proof PureMultidigraph_eval_deterministic[V, E] {
     forall(

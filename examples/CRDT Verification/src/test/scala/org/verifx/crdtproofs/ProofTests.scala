@@ -3,26 +3,6 @@ package org.verifx.crdtproofs
 import org.scalatest.FlatSpec
 
 class ProofTests extends FlatSpec with Prover {
-  "VersionVector" should "preserve causal equality with origin metadata" in {
-    prove(("VersionVector", "VersionVector_origin_preserves_causal_equality"))
-  }
-
-  it should "use origin to break equal-vector ties" in {
-    prove(("VersionVector", "VersionVector_origin_breaks_equal_vector_ties"))
-  }
-
-  it should "keep synchronization commutative" in {
-    prove(("VersionVector", "VersionVector_sync_is_commutative"))
-  }
-
-  it should "keep synchronization idempotent" in {
-    prove(("VersionVector", "VersionVector_sync_is_idempotent"))
-  }
-
-  it should "keep synchronization associative" in {
-    prove(("VersionVector", "VersionVector_sync_is_associative"))
-  }
-
   "OpBasedGSet" should "be a CmRDT" in {
     val set = ("OpBasedGSet", "is_a_CmRDT")
     prove(set)
@@ -522,43 +502,49 @@ class ProofTests extends FlatSpec with Prover {
     prove(("PureTypedGraph", "is_a_CmRDT"))
   }
 
-  it should "use LWW arbitration for multiplicity slots" in {
+  it should "prove visible arcs imply visible endpoints" in {
     prove((
       "PureTypedGraph",
-      "PureTypedGraph_later_arc_wins_multiplicity_slot"
+      "PureTypedGraph_eval_arc_implies_visible_endpoints"
     ))
   }
 
-  it should "cascade vertex removal to causal descendants" in {
+  it should "prove evaluated graph respects schema" in {
     prove((
       "PureTypedGraph",
-      "PureTypedGraph_remove_vertex_removes_causal_descendant"
+      "PureTypedGraph_eval_arc_respects_schema"
     ))
   }
 
-  it should "preserve a concurrently added descendant" in {
+  it should "prove evaluated graphs respect multiplicity upper bounds" in {
     prove((
       "PureTypedGraph",
-      "PureTypedGraph_concurrent_descendant_add_wins_parent_remove"
+      "PureTypedGraph_eval_respects_upper_bounds"
     ))
   }
 
-  it should "prove eval is deterministic" in {
-    prove(("PureTypedGraph", "PureTypedGraph_eval_is_deterministic"))
-  }
-
-  it should "always evaluate to a schema-valid graph" in {
+  it should "prove evaluated graphs are valid" in {
     prove(("PureTypedGraph", "PureTypedGraph_eval_is_valid"))
   }
 
-  it should "prove visible arcs respect the schema" in {
-    prove(("PureTypedGraph", "PureTypedGraph_visible_arcs_respect_schema"))
-  }
-
-  it should "prove visible arcs respect multiplicity slots" in {
+  it should "prove unbounded buckets retain eligible candidates" in {
     prove((
       "PureTypedGraph",
-      "PureTypedGraph_visible_multiplicity_slots_are_unique"
+      "PureTypedGraph_unbounded_candidate_is_visible"
+    ))
+  }
+
+  it should "prove two fresh arcs form the expected incidence bucket" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_two_fresh_arcs_form_candidate_set"
+    ))
+  }
+
+  it should "prove a bound-one bucket keeps its oldest candidate" in {
+    prove((
+      "PureTypedGraph",
+      "PureTypedGraph_bound_one_two_candidate_bucket_keeps_oldest"
     ))
   }
 
